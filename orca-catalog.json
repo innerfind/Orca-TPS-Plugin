@@ -1,0 +1,79 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
+  "catalogVersion": 2,
+  "name": "对话 TPS",
+  "owner": "jecyxyf",
+  "plugins": [
+    {
+      "id": "jecyxyf.tps-stats",
+      "source": {
+        "kind": "git",
+        "url": "https://github.com/jecyxyf/Orca-TPS-Plugin.git",
+        "ref": "main"
+      },
+      "description": "采用 CC Switch 算法统计单次 API 请求的输出速度、首字时间、模型和缓存命中率（自动剔除工具执行耗时，兼容子代理与本地代理库）。支持 Windows 与 Linux。",
+      "categories": [
+        "productivity"
+      ],
+      "releases": [
+        {
+          "version": "1.3.0",
+          "commit": "013748bde7a1a87f35c72b29f4605ec1d60d62ed",
+          "contentHash": "f42bc286009e817111f60b34fcfea5d0b644cc8e1bf5d42a1a5ae20beadfedd8",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.251",
+          "name": "对话 TPS",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "对话 TPS"
+            },
+            {
+              "kind": "commands",
+              "name": "刷新对话 TPS"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "🚀 — tokens/s · 🍪 命中 —"
+            }
+          ],
+          "capabilities": [
+            "storage:own"
+          ],
+          "images": {
+            "icon": {
+              "path": "assets/icon.png",
+              "alt": "对话 TPS",
+              "sha256": "8e1501049b18c550b66ffcc02843db683d5752d3816cd719893a737f34e27a15",
+              "width": 256,
+              "height": 256
+            },
+            "cover": {
+              "path": "assets/cover.png",
+              "alt": "对话 TPS 插件封面：展示 Orca 状态栏实时速度与侧栏单次 API 请求卡片（含精确代理速度、日志估算速度、首字时间与缓存命中率）",
+              "sha256": "d12e7e056e374c9962f459198c174ff13744b01e023f44bc5207a6acc80e4ecc",
+              "width": 1600,
+              "height": 1000
+            },
+            "screenshots": [
+              {
+                "path": "assets/screenshot-dark.png",
+                "alt": "深色主题下的 Orca 工作区与右侧对话 TPS 面板，展示单次请求速度、首字延迟、子代理标签与底部状态栏",
+                "sha256": "e0e82107f568da640c6f3f50477187a475dd2476bb5696fa30a1d0d597cd5137",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/screenshot-light.png",
+                "alt": "浅色主题下的 Orca 工作区与右侧对话 TPS 面板，展示单次请求速度、首字延迟、子代理标签与底部状态栏",
+                "sha256": "e81aa19b108cbba57aa66a8db5fa895963726533a43b47c09253084ece2b34b8",
+                "width": 1600,
+                "height": 1000
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}
