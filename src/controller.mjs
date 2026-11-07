@@ -34,9 +34,15 @@ const matchesTarget = (session, target) => session && target &&
   session.id === `${session.provider}:${target.sessionId}` &&
   (session.provider === target.provider ||
     (['opencode', 'opencode2'].includes(session.provider) && ['opencode', 'opencode2'].includes(target.provider)));
+// Transient unidentified-page reports while an agent runs (tab busy-state, capture lag).
+const TRANSIENT_PAGE_PATTERNS = [
+  '不是可统计的终端对话', '页签尚未识别', '状态尚未同步', '尚未识别',
+  '等待 Orca 记录', '正在更新', '稍后', '等待'
+];
 
 export function createTpsController(orca, {
-  readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 500
+  readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 500,
+  holdActivityMs = 120_000
 } = {}) {
   const instanceId = randomUUID();
   let target = null, key = null, session = null;
@@ -46,6 +52,7 @@ export function createTpsController(orca, {
   let stopped = false, started = false;
   let contextPending = null, loadTask = null, timer = null;
   let lastReadAt = -Infinity, lastStatus = '', publishSequence = 0;
+  let holdUntil = -Infinity, dataStamp = '';
   let statusQueue = Promise.resolve();
   const registrations = [];
 
@@ -62,11 +69,27 @@ export function createTpsController(orca, {
     };
   }
 
+  function recordsStamp(records) {
+    const latest = records[0];
+    return JSON.stringify([
+      records.length,
+      latest?.completedAt ?? null,
+      latest?.tokensPerSecond ?? null,
+      latest?.cacheHitRate ?? null
+    ]);
+  }
+
   function publish() {
     if (stopped) return Promise.resolve();
     const snapshot = state(), sequence = ++publishSequence;
     try { orca.panels.post('tps.changed', snapshot); }
     catch { orca.log('面板推送暂未送达，打开右侧对话 TPS 可重新读取。'); }
+    // Fresh data extends the retention window; stale-only snapshots do not.
+    const stamp = recordsStamp(snapshot.records);
+    if (snapshot.records.length && stamp !== dataStamp) {
+      dataStamp = stamp;
+      holdUntil = now() + holdActivityMs;
+    }
     const latest = snapshot.records[0];
     const speedText = formatSpeedDisplay(latest);
     const cacheText = formatHitRatePercent(latest?.cacheHitRate);
@@ -96,7 +119,20 @@ export function createTpsController(orca, {
       catch { context = { target: null, message: '暂时无法读取当前对话，请稍后刷新。' }; }
       if (stopped) return;
       const next = context?.target ?? null, nextKey = targetKey(next);
-      const message = cleanText(context?.message || (next ? '当前对话还没有可统计的请求记录。' : '当前页面暂无可统计的对话。'), 300);
+      const rawMessage = context?.message || (next ? '当前对话还没有可统计的请求记录。' : '当前页面暂无可统计的对话。');
+      const withinHold = Boolean(session?.records?.length) && now() < holdUntil;
+      // While retention holds, an unidentified-page report during an agent run is
+      // transient: change nothing (target/key/session stay on the last conversation,
+      // which keeps refreshing); only soften the status message.
+      if (!next && withinHold && TRANSIENT_PAGE_PATTERNS.some(pattern => rawMessage.includes(pattern))) {
+        const message = cleanText(`${rawMessage} · 保留最近统计，将在对话恢复后自动刷新。`, 300);
+        if (message !== emptyMessage) {
+          emptyMessage = message;
+          void publish();
+        }
+        return;
+      }
+      const message = cleanText(rawMessage, 300);
       const changed = nextKey !== key;
       const messageChanged = message !== emptyMessage;
       if (changed) {
@@ -106,10 +142,12 @@ export function createTpsController(orca, {
         warnings = [];
         updatedAt = null;
         lastReadAt = -Infinity;
+        holdUntil = -Infinity;
+        dataStamp = '';
+        loading = Boolean(next);
       }
       target = next;
       emptyMessage = message;
-      if (changed || !next) loading = Boolean(next);
       if (changed || messageChanged) void publish();
     })();
     contextPending = task;
@@ -131,15 +169,25 @@ export function createTpsController(orca, {
       try {
         const result = await readSession(requestedTarget, { roots: structuredClone(roots) });
         if (stopped || requestedGeneration !== generation) return state();
-        session = matchesTarget(result.session, requestedTarget) ? result.session : null;
-        warnings = (result.warnings ?? []).map(text => cleanText(text, 500))
-          .filter(text => !HIDDEN_ROUTINE_WARNINGS.has(text)).slice(0, 20);
-        updatedAt = now();
+        const loaded = matchesTarget(result.session, requestedTarget) ? result.session : null;
+        if (loaded) {
+          session = loaded;
+          warnings = (result.warnings ?? []).map(text => cleanText(text, 500))
+            .filter(text => !HIDDEN_ROUTINE_WARNINGS.has(text)).slice(0, 20);
+          updatedAt = now();
+        } else {
+          // Miss (file truncated, parse hiccup, capture lag): keep the previous records
+          // instead of wiping the panel; surface the reason as a warning.
+          const missWarning = cleanText((result.warnings ?? [])[0], 500);
+          warnings = missWarning ? [missWarning] : warnings;
+          updatedAt = now();
+        }
       } catch {
         if (stopped || requestedGeneration !== generation) return state();
-        session = null;
-        updatedAt = null;
-        warnings = ['当前对话的记录读取失败，请稍后刷新。'];
+        // Read failure: retain the last good records so a transient I/O error
+        // does not blank the panel; only the warning changes.
+        warnings = ['当前对话的记录读取失败，保留上次统计，请稍后刷新。'];
+        updatedAt = now();
       }
       loading = false;
       void publish();

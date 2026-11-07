@@ -126,13 +126,15 @@ test('unknown target and read errors never retain another conversation', async (
     readSession: async value => { if (value.sessionId === 'b') throw new Error('/private/file'); return result('a'); }, focusPollMs: 0
   });
   await controller.start();
+  // A real conversation switch (no transient busy-state) clears everything immediately,
+  // even though the target is momentarily unknown.
   active = null; await controller.refresh();
   assert.equal(controller.state().activeSession, null);
   assert.deepEqual(controller.state().records, []);
+  assert.equal(controller.state().updatedAt, null);
   assert.equal(controller.state().emptyMessage, '当前页面不是对话。');
   active = target('b'); await controller.refresh();
   assert.deepEqual(controller.state().records, []);
-  assert.equal(controller.state().updatedAt, null);
   assert.match(controller.state().warnings[0], /读取失败/);
   assert.ok(!JSON.stringify(controller.state()).includes('/private'));
   controller.stop();
@@ -230,6 +232,102 @@ test('panel delivery failure does not prevent bottom-bar updates', async () => {
   });
   await controller.start();
   assert.equal(host.statuses.at(-1).text, '🚀 ≈10 tokens/s · 🍪 命中 75.0%');
+  controller.stop();
+});
+
+test('long-running agent busy-state keeps prior records instead of flashing them away', async () => {
+  const host = fakeHost();
+  let active = target('a'), busyPage = false, time = 0;
+  const controller = createTpsController(host.orca, {
+    readActive: async () => busyPage
+      ? { target: null, message: '当前页签不是可统计的终端对话。' }
+      : { target: active },
+    readSession: async value => result(value.sessionId, 42, 0.98),
+    now: () => time, pollMs: 5000, focusPollMs: 0, holdActivityMs: 100_000
+  });
+  await controller.start();
+  assert.equal(controller.state().records[0].tokensPerSecond, 42);
+
+  // Agent starts a long task; Orca briefly reports the tab as a non-terminal page.
+  time = 1000;
+  busyPage = true;
+  await controller.refresh();
+  const held = controller.state();
+  assert.equal(held.records.length, 1, 'records must survive transient busy-state');
+  assert.equal(held.records[0].tokensPerSecond, 42);
+  assert.match(held.emptyMessage, /保留最近统计/);
+
+  // Still within retention (last fresh data at t≈0, window 100s): busy polls keep the records.
+  time = 60_000;
+  await controller.checkActive();
+  assert.equal(controller.state().records.length, 1);
+  assert.equal(controller.state().records[0].tokensPerSecond, 42);
+
+  // After the retention window expires with no recovery, the panel finally clears.
+  time = 200_000;
+  await controller.checkActive();
+  assert.deepEqual(controller.state().records, []);
+
+  // Recovery restores fresh reads.
+  busyPage = false;
+  await controller.refresh();
+  assert.equal(controller.state().records[0].tokensPerSecond, 42);
+  controller.stop();
+});
+
+test('genuinely different conversation still clears records immediately', async () => {
+  const host = fakeHost();
+  let active = target('a');
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active }),
+    readSession: async value => result(value.sessionId, 11), focusPollMs: 0
+  });
+  await controller.start();
+  active = target('b');
+  await controller.refresh();
+  assert.equal(controller.state().activeSession.id, 'codex:b');
+  assert.equal(controller.state().records[0].id, 'req-b-11');
+  assert.ok(!controller.state().records.some(record => record.id === 'req-a-11'));
+  controller.stop();
+});
+
+test('a missed targeted read keeps the last records and surfaces the reason', async () => {
+  const host = fakeHost(); let failReads = false;
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('a') }),
+    readSession: async () => failReads
+      ? { session: null, warnings: ['claude：会话读取失败（EBUSY），未生成估算数据。'] }
+      : result('a', 33), focusPollMs: 0
+  });
+  await controller.start();
+  assert.equal(controller.state().records[0].tokensPerSecond, 33);
+  failReads = true;
+  await controller.refresh();
+  const held = controller.state();
+  assert.equal(held.records.length, 1, 'transient read miss must retain records');
+  assert.equal(held.records[0].tokensPerSecond, 33);
+  assert.match(held.warnings[0], /读取失败/);
+  failReads = false;
+  await controller.refresh();
+  assert.equal(controller.state().records[0].tokensPerSecond, 33);
+  assert.deepEqual(controller.state().warnings, []);
+  controller.stop();
+});
+
+test('a thrown read error keeps the last records with a recovery hint', async () => {
+  const host = fakeHost(); let throws = false;
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('a') }),
+    readSession: async () => { if (throws) throw new Error('EIO'); return result('a', 21); }, focusPollMs: 0
+  });
+  await controller.start();
+  assert.equal(controller.state().records[0].tokensPerSecond, 21);
+  throws = true;
+  await controller.refresh();
+  const held = controller.state();
+  assert.equal(held.records.length, 1);
+  assert.equal(held.records[0].tokensPerSecond, 21);
+  assert.match(held.warnings[0], /保留上次统计/);
   controller.stop();
 });
 
