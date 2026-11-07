@@ -1,70 +1,72 @@
-# 对话 TPS（Orca TPS Stats Plugin）
+# Orca Tokens & TPS Statistics Plugin
 
-[简体中文](./README.md) | [English](./README.en.md)
+**Orca 软件 Tokens 统计插件** · **English** | **[简体中文文档 (Chinese Documentation)](./README.zh-CN.md)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Orca Engine](https://img.shields.io/badge/Orca-%3E%3D1.4.251-blue.svg)](https://github.com/stablyai/orca)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933.svg)](https://nodejs.org/)
 [![CI](https://github.com/jecyxyf/Orca-TPS-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/jecyxyf/Orca-TPS-Plugin/actions/workflows/ci.yml)
 
-![对话 TPS 插件封面](./assets/cover.png)
+![Orca Tokens & Per-Request TPS Stats Cover](./assets/cover.png)
 
-适用于 **Orca IDE 1.4.251+** 的实时对话速度（TPS）、首字延迟（TTFT）与缓存命中率统计插件。采用与 [CC Switch](https://github.com/farion1231/cc-switch) 完全一致的**单次 API 请求级**计算引擎，自动剔除本地工具执行与权限等待耗时，零外部依赖，原生支持 **Linux** 与 **Windows**。
+Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-token (TTFT)**, and **prompt-cache hit rate** statistics plugin for **Orca IDE (`>= 1.4.251`)**. Powered by a zero-dependency calculation engine 100% aligned with [CC Switch](https://github.com/farion1231/cc-switch), automatically excluding local tool execution and permission wait times across **Linux** and **Windows**.
 
----
-
-## 核心特性
-
-- **底部状态栏实时跟随**：自动识别当前焦点工作区、页签与终端分屏，实时展示最新一次 API 请求的输出速度与缓存命中率（如 `🚀 ≈68 tokens/s · 🍪 命中 99.2%` 或代理精确模式 `🚀 86 tokens/s`），点击即可立即刷新。
-- **侧栏请求级明细卡片**：在右侧活动栏打开「对话 TPS」，查看当前对话最近 100 次 API 请求的**模型名称、完成时间、首字延迟（TTFT）、输出 Token、请求耗时、输出速度与缓存命中率**，并自动标记 `子代理` 与 `代理` 来源。
-- **严格剔除工具运行耗时**：不再用整轮挂钟时间充当分母，避免本地编译、测试脚本执行或权限确认弹窗拉低模型真实生成速度。
-- **完整支持四大 CLI 与子代理**：原生解析本机终端中的 **Claude Code**（含 `<SESSION_ID>/subagents` 与 `workflows` 子代理）、**Codex CLI**、**OpenCode（v1 / v2）** 与 **Pi Agent**，并支持只读融合 `~/.cc-switch/cc-switch.db` 本地路由代理的精确首字记录。
-- **隐私与只读安全设计**：零网络请求、不上传任何数据、不写入或修改任何会话文件与外部数据库；对话提示词（Prompt）与回复正文绝不离开解析器进入面板或日志。
+> 📖 **中文说明 / Chinese Guide**: 请查看 **[简体中文完整文档 (README.zh-CN.md)](./README.zh-CN.md)**。
 
 ---
 
-## 界面预览
+## Key Features
 
-| 深色主题（Dark） | 浅色主题（Light） |
+- **Live Status Bar Tracking**: Automatically follows the active Orca workspace, tab, and split terminal pane to display the latest API request's output speed and cache hit rate (e.g., `🚀 ≈68 tokens/s · 🍪 命中 99.2%` or exact proxy mode `🚀 86 tokens/s`). Click to refresh immediately.
+- **Per-Request Sidebar Cards**: Open the sidebar panel to inspect the latest 100 API requests in the active conversation — including **model ID, completion timestamp, TTFT, output tokens, request duration, TPS, and cache hit rate**, with automatic badges for subagents (`子代理`) and local routing proxy (`代理`).
+- **Tool Execution Time Excluded**: Measures individual API call durations instead of whole-turn wall-clock time, so local builds, test suites, shell commands, and approval dialogs never distort model generation speed.
+- **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, and **Pi Agent**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
+- **Strict Read-Only & Privacy-First**: Zero network requests, zero writes to agent transcripts or external databases, and zero prompt/response content exposure outside the local parser.
+
+---
+
+## Screenshots
+
+| Dark Theme | Light Theme |
 | :---: | :---: |
 | ![Dark Screenshot](./assets/screenshot-dark.png) | ![Light Screenshot](./assets/screenshot-light.png) |
 
 ---
 
-## 计算方式与规则（对齐 CC Switch）
+## Calculation Methodology (CC Switch Parity)
 
-### 1. 各提供方请求耗时与首字提取
+### 1. Per-Provider Request Timing & Token Extraction
 
-| 提供方 | 单次请求起点 | 单次请求终点（剔除工具耗时） | 首字时间（TTFT）与 Token 规则 |
+| Provider | Request Start | Request End (Excludes Tool Runtime) | TTFT & Token Rules |
 | :--- | :--- | :--- | :--- |
-| **Claude Code** | 按 `message.id` 聚合多内容块，沿首块 `parentUuid` 跳过 `attachment` 向上回溯（最多 32 跳）至触发消息时间戳 | 同一 `message.id` 具有 `stop_reason` 时的最大块时间戳 | 首块为 `thinking` 且含 `thinkingDurationMs` 时推算估算首字；自动合并 `isSidechain`、`subagents/*.jsonl` 与 `subagents/workflows/*/*.jsonl` |
-| **Codex CLI** | `RequestTimer` 状态机锁定首条模型输出前的最近边界（`turn_context`、用户消息、工具 `*_output`、前序 `token_count`） | 优先取匹配的 `token_usage_record` 时间戳或工具输出前的模型输出终点，否则取 `token_count` | 从 `item_completed`（`Reasoning` / `AgentMessage`）的 `started_at_ms` 提取估算首字；支持 `limit_id` 快照去重与模型名归一化 |
-| **OpenCode v1 / v2** | 消息记录 `time.created`（缺省回退 `time_created`） | **优先取 `time.streamed`**（流式生成结束时刻，不含后续工具执行），缺省回退 `time.completed` | 输出量计为 `tokens.output + tokens.reasoning`；同时支持 v2 `compaction` 消息 |
-| **Pi Agent** | 优先读取显式 `duration`，否则取 `message.timestamp` | `entry.timestamp` | 支持展开官方 `subagent` 工具调用结果的用量明细（不继承父工具完成耗时） |
+| **Claude Code** | Groups multi-block streaming entries by `message.id` and walks `parentUuid` (up to 32 hops, skipping `attachment` nodes) to the triggering message timestamp | Maximum block timestamp once `stop_reason` is present | Infers TTFT from `thinkingDurationMs` when block `0` is `thinking`; merges `isSidechain`, `subagents/*.jsonl`, and `subagents/workflows/*/*.jsonl` |
+| **Codex CLI** | `RequestTimer` locks onto the latest boundary (`turn_context`, user message, `*_output` tool result, or prior `token_count`) before first model output | Prefers matching `token_usage_record` timestamp or last model output before tool execution; falls back to `token_count` | Extracts TTFT from `item_completed` (`Reasoning` / `AgentMessage`) `started_at_ms`; deduplicates `limit_id` snapshots and normalizes model IDs |
+| **OpenCode v1 / v2** | Message `time.created` (falls back to `time_created`) | **Prefers `time.streamed`** (end of streaming before tool execution); falls back to `time.completed` | Counts `tokens.output + tokens.reasoning` together; supports v2 `compaction` rows |
+| **Pi Agent** | Explicit `duration` when present, else `message.timestamp` | `entry.timestamp` | Unpacks official `subagent` `toolResult` usage records without inheriting parent tool completion latency |
 
-### 2. 精确速度 vs 日志估算速度门槛
+### 2. Exact Proxy Speed vs. Session-Log Estimated Speed
 
-| 模式 | 数据来源 | 防噪门槛 | 计算公式 | 显示格式 |
+| Mode | Source | Anti-Noise Threshold | Formula | Display Format |
 | :--- | :--- | :--- | :--- | :--- |
-| **本地代理精确速度** | `~/.cc-switch/cc-switch.db` 中匹配的 `2xx` `proxy` 记录（精确 ID 或 `±600s` 同模型同 Token 语义匹配） | `output_tokens >= 100` 且纯生成时间 `latency_ms - first_token_ms >= 100ms` | $\dfrac{\text{output\_tokens}}{(\text{latency\_ms} - \text{first\_token\_ms}) \div 1000}$ | 无前缀（如 `86`），卡片带 `代理` 标签 |
-| **会话日志估算速度** | 各 CLI 本机 JSONL / SQLite 会话记录 | `output_tokens >= 200` 且合理耗时 `1000ms <= latency_ms <= 1h` | $\dfrac{\text{output\_tokens}}{\text{latency\_ms} \div 1000}$ | 带 `≈` 前缀（如 `≈68`）；未达门槛显示 `—`（悬停提示原因） |
+| **Exact Proxy Speed** | Matching `2xx` `proxy` row in `~/.cc-switch/cc-switch.db` (exact `request_id` or `±600s` model + token semantic match) | `output_tokens >= 100` and post-TTFT window `latency_ms - first_token_ms >= 100ms` | $\dfrac{\text{output\_tokens}}{(\text{latency\_ms} - \text{first\_token\_ms}) \div 1000}$ | Exact value (e.g. `86`) with `代理` badge |
+| **Estimated Log Speed** | Local CLI JSONL / SQLite session transcripts | `output_tokens >= 200` and plausible duration `1000ms <= latency_ms <= 1h` | $\dfrac{\text{output\_tokens}}{\text{latency\_ms} \div 1000}$ | Prefixed with `≈` (e.g. `≈68`); ineligible calls show `—` with reason tooltip |
 
-- **数值舍入**：`TPS >= 1` 四舍五入为整数，`0 < TPS < 1` 保留 1 位小数。
-- **缓存命中率**：统一归一化净新输入后按 $\text{cache\_read} \div (\text{fresh\_input} + \text{cache\_creation} + \text{cache\_read})$ 计算；`>= 99.95%` 显示 `100%`，其余保留 1 位小数。
+- **Rounding**: `TPS >= 1` rounds to the nearest integer; `0 < TPS < 1` retains 1 decimal place.
+- **Cache Hit Rate**: Normalizes fresh input tokens across providers as $\text{cache\_read} \div (\text{fresh\_input} + \text{cache\_creation} + \text{cache\_read})$; values `>= 99.95%` render as `100%`.
 
 ---
 
-## 安装指南
+## Installation
 
-### 方式一：通过 Orca 插件目录 / Git 仓库安装
+### Option 1: Install via Orca Git / Catalog Source
 
-本仓库已包含标准 `orca-plugin.json`（Manifest v2）与 `orca-catalog.json`，可在支持 Git / Catalog 源的 Orca（`>= 1.4.251`）中直接引用仓库地址安装：
+This repository ships with both `orca-plugin.json` (Manifest v2) and `orca-catalog.json` (Catalog v2) for Orca `>= 1.4.251`:
 
 ```text
 https://github.com/jecyxyf/Orca-TPS-Plugin.git
 ```
 
-### 方式二：Linux 本地克隆加载
+### Option 2: Local Clone on Linux
 
 ```sh
 git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git ~/Applications/orca-tps-plugin
@@ -72,13 +74,13 @@ cd ~/Applications/orca-tps-plugin
 sh install-linux.sh
 ```
 
-若 `orca` 不在默认 `PATH` 中，可显式指定路径：
+If `orca` is not on your default `PATH`, specify `ORCA_CLI`:
 
 ```sh
 ORCA_CLI="$HOME/.config/orca/linux-orca-cli-shim/orca" sh install-linux.sh
 ```
 
-### 方式三：Windows 本地克隆加载（PowerShell）
+### Option 3: Local Clone on Windows (PowerShell)
 
 ```powershell
 git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git "$env:USERPROFILE\Applications\orca-tps-plugin"
@@ -86,62 +88,64 @@ Set-Location "$env:USERPROFILE\Applications\orca-tps-plugin"
 ./install-windows.ps1
 ```
 
-> **提示**：本地开发目录加载后请保留克隆目录；关闭终端不会卸载插件。如需移除本地开发挂载，可执行 `orca plugin dev unload <目录路径>`。
+> **Note**: Keep the cloned directory in place while loaded in local development mode. To unload it later, run `orca plugin dev unload <directory>`.
 
 ---
 
-## 默认数据扫描位置
+## Default Data Locations
 
-插件优先读取 Orca 当前活动终端保存的精确会话路径；缺少显式路径时才在默认目录按会话 ID 匹配（绝不回退显示其他会话数据）：
+The plugin reads the exact transcript/database path recorded by Orca for the focused terminal pane first, and only falls back to matching the exact session ID under default locations (never displaying another session's data):
 
-| 数据源 | 默认位置 |
+| Source | Default Paths |
 | :--- | :--- |
-| **Codex** | `~/.codex/sessions`、Orca 托管 `codex-runtime-home/home/sessions` 及多账户目录 |
-| **Claude** | `~/.claude/projects`（含 `<SESSION_ID>/subagents`）、Orca 托管 Claude 账户目录 |
-| **OpenCode / OpenCode 2** | `~/.local/share/opencode/opencode.db`（支持 `OPENCODE_DB`、`XDG_DATA_HOME`） |
-| **Pi** | `~/.pi/agent/sessions`（支持 `PI_CODING_AGENT_DIR`） |
-| **CC Switch 代理库（可选）** | `~/.cc-switch/cc-switch.db`（支持 `CC_SWITCH_DB_PATH`） |
+| **Codex** | `~/.codex/sessions`, Orca `codex-runtime-home/home/sessions`, managed Codex accounts |
+| **Claude** | `~/.claude/projects` (including `<SESSION_ID>/subagents`), managed Claude profiles |
+| **OpenCode / OpenCode 2** | `~/.local/share/opencode/opencode.db` (respects `OPENCODE_DB`, `XDG_DATA_HOME`) |
+| **Pi** | `~/.pi/agent/sessions` (respects `PI_CODING_AGENT_DIR`) |
+| **CC Switch Proxy DB (Optional)** | `~/.cc-switch/cc-switch.db` (respects `CC_SWITCH_DB_PATH`) |
 
 ---
 
-## 目录结构
+## Repository Structure
 
 ```text
 Orca-TPS-Plugin/
-├── assets/                   # 插件图标、16:10 封面与明暗主题预览图
+├── assets/                   # Plugin icon, 16:10 cover banner, and dark/light screenshots
 ├── src/
-│   ├── worker.mjs            # Orca trusted-worker 激活入口
-│   ├── active-conversation.mjs # 只读解析 Orca 当前活动工作区/页签/分屏会话
-│   ├── controller.mjs        # 状态同步、并发代际隔离与底部状态栏更新队列
-│   ├── data.mjs              # JSONL 尾部读取、SQLite 只读查询、子代理与代理库合并
-│   ├── data-paths.mjs        # Linux / Windows / macOS 跨平台数据目录解析
-│   ├── parsers.mjs           # CC Switch 同款单次请求解析与速度/缓存计算核心
-│   └── panel.html            # 侧栏响应式 HTML 面板（自动适配明暗主题）
-├── tests/                    # 51 项单元与 SQLite 集成测试
-├── .github/workflows/ci.yml  # Ubuntu + Windows 双平台自动化测试流水线
-├── install-linux.sh          # Linux 一键校验与加载脚本
-├── install-windows.ps1       # Windows PowerShell 一键校验与加载脚本
-├── orca-plugin.json          # Orca 插件清单（Manifest v2）
-├── orca-catalog.json         # Orca 插件发布目录索引（Catalog v2）
-├── CHANGELOG.md              # 版本变更记录
-├── THIRD_PARTY_NOTICES.md    # 第三方开源致谢与规范说明
-└── LICENSE                   # MIT 开源许可证
+│   ├── worker.mjs            # Orca trusted-worker activation entry
+│   ├── active-conversation.mjs # Read-only Orca active workspace/tab/pane resolver
+│   ├── controller.mjs        # State sync, generation fencing, and status bar queue
+│   ├── data.mjs              # Bounded JSONL reader, read-only SQLite, subagent & proxy merger
+│   ├── data-paths.mjs        # Cross-platform Linux / Windows / macOS path resolution
+│   ├── parsers.mjs           # CC Switch-aligned per-request parser & speed/cache formulas
+│   └── panel.html            # Responsive sidebar HTML panel with light/dark theming
+├── tests/                    # 51 unit and SQLite integration tests
+├── .github/workflows/ci.yml  # Automated CI matrix for Ubuntu and Windows
+├── install-linux.sh          # Linux validation & loader script
+├── install-windows.ps1       # Windows PowerShell validation & loader script
+├── orca-plugin.json          # Orca Plugin Manifest v2
+├── orca-catalog.json         # Orca Plugin Catalog v2
+├── README.zh-CN.md           # Simplified Chinese documentation (简体中文文档)
+├── CHANGELOG.md              # Release history
+├── THIRD_PARTY_NOTICES.md    # Open-source attributions
+└── LICENSE                   # MIT License
 ```
 
 ---
 
-## 开发与测试
+## Development & Testing
 
 ```sh
-# 运行全部单元与 SQLite 集成测试（需 Node.js >= 22.13）
+# Run all 51 unit & SQLite integration tests (requires Node.js >= 22.13)
 npm test
 
-# 使用 Orca CLI 校验插件清单与权限说明
+# Validate manifest, catalog, and tests via Orca CLI
 orca plugin validate .
+orca plugin validate orca-catalog.json
 orca plugin inspect .
 orca plugin test .
 ```
 
-## 开源许可
+## License
 
-本项目基于 [MIT License](./LICENSE) 开源。算法设计与宿主接口规范致谢见 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md)。
+Released under the [MIT License](./LICENSE). See [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md) for third-party attributions.
