@@ -1,0 +1,20 @@
+{
+  "pluginVersion": "1.3.0",
+  "orcaVersion": "1.4.251",
+  "date": "2026-11-07",
+  "ccSwitchParity": {
+    "claude": "5/5 real requests matched cc-switch.db output_tokens, latency_ms, and first_token_ms to 0ms delta; subagents/*.jsonl and subagents/workflows/*/*.jsonl supported",
+    "codex": "6/6 real multi-step requests matched cc-switch.db output_tokens, latency_ms, and first_token_ms to 0ms delta via RequestTimer + token_usage_record",
+    "opencode2": "5/5 real requests matched cc-switch.db output_tokens (output + reasoning) and latency_ms (time.streamed - time.created) to 0ms delta",
+    "pi": "per-request duration/timestamp delta and subagent toolResult unpacking verified",
+    "proxyIntegration": "read-only ~/.cc-switch/cc-switch.db 2xx proxy record upgrade (exact ID + ±600s semantic dedup) verified",
+    "thresholds": "session-log estimated speed requires >=200 output tokens and >=1000ms latency (≈); proxy exact speed requires >=100 output tokens and >=100ms post-TTFT generation"
+  },
+  "linux": {
+    "environment": "Linux 6.17.0-40-generic, Node v22.23.1",
+    "nativePluginValidate": "passed",
+    "nativePluginTest": { "passed": 51, "failed": 0, "skipped": 0 },
+    "shellInstallerSyntax": "sh -n install-linux.sh passed"
+  },
+  "limitations": "Uses read-only internal Orca profile state; terminal provider identity may lag up to the next approximately 60-second capture. Local terminal conversations only; native-chat and remote pages return empty."
+}

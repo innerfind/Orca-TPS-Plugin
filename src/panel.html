@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>对话速度</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f2f2f7;
+      --surface: #ffffff;
+      --ink: #1c1c1e;
+      --muted: #6d6d75;
+      --line: #e5e5ea;
+      --purple: #8f32d6;
+      --blue: #0066e6;
+      --orange: #b45300;
+      --green: #007f48;
+      --cache: #9c6500;
+      --speed: #c72e3a;
+      --speed-bg: #f0f0f3;
+      --tag-bg: #ededf2;
+      --proxy-bg: #e5f7ee;
+      --button-bg: #e5f0ff;
+      --warning-bg: #fff1dc;
+      --error: #c8213a;
+      --error-bg: #fff0f3;
+      --shadow: 0 3px 12px rgb(39 43 72 / 3%);
+    }
+    html.dark {
+      color-scheme: dark;
+      --page: #161618;
+      --surface: #262628;
+      --ink: #f5f5f7;
+      --muted: #b4b4be;
+      --line: #3a3a3e;
+      --purple: #d38aff;
+      --blue: #64b0ff;
+      --orange: #ffb340;
+      --green: #4ade80;
+      --cache: #e8b65b;
+      --speed: #ff6b72;
+      --speed-bg: #303034;
+      --tag-bg: #343439;
+      --proxy-bg: #193829;
+      --button-bg: #163552;
+      --warning-bg: #46321b;
+      --error: #ff8fa5;
+      --error-bg: #49232d;
+      --shadow: 0 3px 12px rgb(0 0 0 / 6%);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { min-width: 0; min-height: 100%; background: var(--page); }
+    body {
+      margin: 0;
+      min-width: 0;
+      padding: 16px;
+      color: var(--ink);
+      background: var(--page);
+      font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+      font-size: 13px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .heading { min-width: 0; }
+    h1 { margin: 0; font-size: 18px; line-height: 1.4; letter-spacing: -.3px; font-weight: 750; }
+    .summary { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .refresh {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      flex-shrink: 0; min-height: 34px; padding: 7px 11px; border: 0; border-radius: 13px;
+      background: var(--button-bg); color: var(--blue); font-size: 12px; font-weight: 650; cursor: pointer;
+    }
+    .refresh svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .refresh:hover:not(:disabled) { filter: brightness(.96); }
+    .refresh:active:not(:disabled) { transform: translateY(1px); }
+    .refresh:disabled { cursor: default; opacity: .6; }
+    .refresh:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+    .refresh.is-busy svg { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .messages:empty { display: none; }
+    .message { margin-top: 12px; padding: 11px 13px; border-radius: 14px; overflow-wrap: anywhere; font-size: 12px; }
+    .message-error { color: var(--error); background: var(--error-bg); }
+    .message-warning { color: var(--orange); background: var(--warning-bg); }
+    .loading { margin: 12px 2px 0; color: var(--muted); font-size: 12px; }
+    .records { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+    .record-card { min-width: 0; padding: 10px 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .card-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, min(40%, 144px)); align-items: center; gap: 12px; }
+    .identity { min-width: 0; }
+    .model-line { display: flex; align-items: center; gap: 5px; min-width: 0; }
+    .model-icon { flex-shrink: 0; font-size: 16px; }
+    .model { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--purple); font-size: 13px; line-height: 1.6; font-weight: 700; }
+    .badge { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--tag-bg); color: var(--muted); font-size: 10px; font-weight: 600; line-height: 1.4; }
+    .badge-proxy { background: var(--proxy-bg); color: var(--green); }
+    .meta-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0 5px; margin-top: 2px; color: var(--muted); font-size: 11px; }
+    .timestamp { overflow-wrap: anywhere; }
+    .ttft { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .speed { min-width: 0; padding: 5px 8px; border-radius: 15px; background: var(--speed-bg); color: var(--speed); text-align: center; }
+    .speed-top { display: flex; align-items: baseline; justify-content: center; gap: 4px; min-width: 0; }
+    .rocket { width: 16px; height: 16px; flex-shrink: 0; align-self: center; }
+    .speed-value { min-width: 0; font-size: 20px; font-weight: 750; line-height: 1.15; letter-spacing: -.6px; overflow-wrap: anywhere; }
+    .speed-unit { display: block; margin-top: 1px; font-size: 10px; font-weight: 550; }
+    .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 8px 0 0; padding-top: 7px; border-top: 1px solid var(--line); }
+    .metric { min-width: 0; }
+    .metric-label { margin: 0 0 3px; color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .metric-label span { margin-right: 3px; font-size: 12px; }
+    .metric-value-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 1px 3px; min-width: 0; margin: 0; }
+    .metric-value { min-width: 0; max-width: 100%; font-size: 16px; line-height: 1.25; font-weight: 650; letter-spacing: -.3px; overflow-wrap: anywhere; }
+    .metric-unit { color: var(--muted); font-size: 10px; }
+    .output { color: var(--blue); }
+    .duration { color: var(--green); }
+    .cache { color: var(--cache); }
+    .speed-value, .metric-value { font-variant-numeric: tabular-nums; }
+    .metric-value.is-long { font-size: 14px; letter-spacing: -.4px; }
+    .metric-value.is-very-long { font-size: 12px; }
+    .speed-value.is-long { font-size: 16px; }
+    .speed-value.is-very-long { font-size: 14px; }
+    .empty { margin-top: 16px; padding: 28px 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); text-align: center; }
+    .empty-icon { font-size: 26px; }
+    .empty-text { margin: 10px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .footer { margin: 15px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
+    .footer p { margin: 0; }
+    @media (max-width: 339px) {
+      .metrics { gap: 6px; }
+      .card-top { gap: 8px; }
+      .model { font-size: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .refresh.is-busy svg { animation: none; }
+      .refresh:active:not(:disabled) { transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <main id="panel" aria-label="当前对话速度">
+    <header class="panel-header">
+      <div class="heading">
+        <h1>对话速度</h1>
+        <p class="summary" id="summary">当前对话 · 最近 0 次请求</p>
+      </div>
+      <button class="refresh" id="refresh" data-testid="refresh" type="button" aria-label="刷新统计">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
+        <span>刷新</span>
+      </button>
+    </header>
+    <div class="message message-error" id="error" data-testid="error" role="alert" hidden></div>
+    <div class="messages" id="warnings"></div>
+    <p class="loading" id="loading" data-testid="loading" role="status" aria-live="polite">正在读取当前对话…</p>
+    <ol class="records" id="records" aria-label="单次请求速度记录"></ol>
+    <div class="empty" id="empty" data-testid="empty" hidden>
+      <span class="empty-icon" aria-hidden="true">🚀</span>
+      <p class="empty-text" id="empty-text"></p>
+    </div>
+    <footer class="footer">
+      <p>单次请求速度（剔除工具耗时）：日志估算需 ≥200 token 且 ≥1s（≈），代理精确速度扣首字需 ≥100 token。</p>
+      <p id="updated" hidden></p>
+    </footer>
+  </main>
+
+  <template id="record-template">
+    <li class="record-card" data-testid="record-card">
+      <div class="card-top">
+        <div class="identity">
+          <div class="model-line">
+            <span class="model-icon" aria-hidden="true">🤖</span>
+            <h2 class="model" data-testid="model"></h2>
+            <span class="badge" data-testid="subagent-badge" hidden>子代理</span>
+            <span class="badge badge-proxy" data-testid="proxy-badge" hidden>代理</span>
+          </div>
+          <div class="meta-line">
+            <time class="timestamp" data-testid="timestamp"></time>
+            <span class="ttft" data-testid="ttft" hidden></span>
+          </div>
+        </div>
+        <div class="speed">
+          <div class="speed-top"><svg class="rocket" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15l-3-3c1.3-5 5.2-9 12-9 0 6.8-4 10.7-9 12Z"/><circle cx="16" cy="8" r="1.5"/><path d="m9 12-5-1 4-4 4 1m0 7 1 5 4-4-1-4M8 16c-3-1-5 1-5 5 4 0 6-2 5-5Z"/></svg><span class="speed-value" data-testid="speed-value"></span></div>
+          <span class="speed-unit">tokens/s</span>
+        </div>
+      </div>
+      <dl class="metrics">
+        <div class="metric output">
+          <dt class="metric-label"><span aria-hidden="true">📦</span>输出</dt>
+          <dd class="metric-value-line"><span class="metric-value" data-testid="output-value"></span><span class="metric-unit">token</span></dd>
+        </div>
+        <div class="metric duration">
+          <dt class="metric-label"><span aria-hidden="true">⏳</span>耗时</dt>
+          <dd class="metric-value-line"><span class="metric-value" data-testid="duration-value"></span><span class="metric-unit">秒</span></dd>
+        </div>
+        <div class="metric cache">
+          <dt class="metric-label"><span aria-hidden="true">🍪</span>缓存命中</dt>
+          <dd class="metric-value-line"><span class="metric-value" data-testid="cache-value"></span></dd>
+        </div>
+      </dl>
+    </li>
+  </template>
+
+  <script>
+    (() => {
+      'use strict';
+      const byId = id => document.getElementById(id);
+      const ui = Object.fromEntries(['panel', 'summary', 'refresh', 'error', 'warnings', 'loading', 'records', 'empty', 'empty-text', 'updated', 'record-template'].map(id => [id, byId(id)]));
+      const lifetime = new AbortController();
+      const retiredInstances = new Set();
+      const subscriptions = [];
+      let current = null;
+      let busy = false;
+      let problem = '';
+      let revision = 0;
+      let disposed = false;
+      let drawnRecords = '';
+      let resetScroll = false;
+      const bridge = window.orca?.plugin;
+
+      const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+      const isSessionLog = record => typeof record?.dataSource === 'string' && record.dataSource.length > 0 && record.dataSource !== 'proxy';
+      function number(value, fraction = 0) {
+        return numeric(value) ? value.toLocaleString('zh-CN', { minimumFractionDigits: fraction, maximumFractionDigits: fraction }) : '—';
+      }
+      function formatTps(record) {
+        const tps = record?.tokensPerSecond;
+        if (!numeric(tps) || tps <= 0) return '—';
+        const core = tps >= 1 ? Math.round(tps).toLocaleString('zh-CN') : tps.toFixed(1);
+        return record?.isEstimatedSpeed ? `≈${core}` : core;
+      }
+      function speedTooltip(record) {
+        const tps = record?.tokensPerSecond;
+        const dur = numeric(record?.durationMs) && record.durationMs > 0 ? (record.durationMs / 1000).toFixed(1) : null;
+        const ttft = numeric(record?.firstTokenMs) && record.firstTokenMs > 0 ? (record.firstTokenMs / 1000).toFixed(1) : null;
+        const session = isSessionLog(record);
+        if (numeric(tps) && tps > 0) {
+          if (!record?.isEstimatedSpeed) {
+            const genMs = numeric(record?.generationMs) ? record.generationMs : (numeric(record?.durationMs) && numeric(record?.firstTokenMs) ? record.durationMs - record.firstTokenMs : null);
+            const gen = numeric(genMs) ? (genMs / 1000).toFixed(1) : '—';
+            return `精确生成速度 ${tps.toFixed(1)} tokens/s（总耗时 ${dur ?? '—'}s · 首字 ${ttft ?? '—'}s · 纯生成 ${gen}s）`;
+          }
+          return ttft
+            ? `日志估算速度 ≈${tps.toFixed(1)} tokens/s（请求耗时 ≈${dur}s · 估算首字 ≈${ttft}s）`
+            : `日志估算速度 ≈${tps.toFixed(1)} tokens/s（请求耗时 ≈${dur}s，含首字等待）`;
+        }
+        if (record?.dataSource === 'proxy') {
+          if (!numeric(record.firstTokenMs) || record.firstTokenMs <= 0) return '非流式或缺少首字时间，不计精确速度';
+          if (numeric(record.outputTokens) && record.outputTokens < 100) return `输出 ${record.outputTokens} token < 100（代理精确速度门槛）`;
+          return '纯生成耗时不足 100 毫秒，不计速度';
+        }
+        if (session) {
+          if (!numeric(record?.durationMs) || record.durationMs <= 0) return '缺少有效请求耗时';
+          if (numeric(record.outputTokens) && record.outputTokens < 200) return `输出 ${record.outputTokens} token < 200（CC Switch 日志估算门槛）`;
+          if (record.durationMs < 1000) return `请求耗时 ${record.durationMs}ms < 1s（CC Switch 日志估算门槛）`;
+        }
+        return '速度未知';
+      }
+      function date(value) {
+        if (!numeric(value) || value === 0) return null;
+        const result = new Date(value);
+        return Number.isFinite(result.getTime()) ? result : null;
+      }
+      function timeLabel(value) {
+        return date(value)?.toLocaleString('zh-CN', {
+          month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+        }) ?? '—';
+      }
+      function setValue(element, formatted, exact) {
+        element.textContent = formatted;
+        element.title = exact;
+        element.classList.toggle('is-long', formatted.length > 10);
+        element.classList.toggle('is-very-long', formatted.length > 16);
+      }
+      function recordCard(record) {
+        const card = ui['record-template'].content.firstElementChild.cloneNode(true);
+        const find = name => card.querySelector(`[data-testid="${name}"]`);
+        const model = typeof record.model === 'string' && record.model ? record.model : '模型 —';
+        find('model').textContent = model;
+        find('model').title = model;
+        find('subagent-badge').hidden = !record.isSubagent;
+        find('proxy-badge').hidden = record.dataSource !== 'proxy';
+        const when = date(record.completedAt);
+        const timestamp = find('timestamp');
+        timestamp.textContent = timeLabel(record.completedAt);
+        timestamp.title = when?.toLocaleString('zh-CN', { hour12: false }) ?? '完成时间未知';
+        if (when) timestamp.dateTime = when.toISOString();
+
+        const session = isSessionLog(record);
+        const ttftEl = find('ttft');
+        if (numeric(record.firstTokenMs) && record.firstTokenMs > 0) {
+          const ttftSec = (record.firstTokenMs / 1000).toFixed(1);
+          ttftEl.hidden = false;
+          ttftEl.textContent = `· 首字 ${session ? '≈' : ''}${ttftSec}s`;
+          ttftEl.title = `${session ? '估算' : '精确'}首字时间 ${record.firstTokenMs} 毫秒（${ttftSec} 秒）`;
+        }
+
+        setValue(find('speed-value'), formatTps(record), speedTooltip(record));
+        setValue(find('output-value'), number(record.outputTokens), numeric(record.outputTokens) ? `${record.outputTokens} token` : '输出用量未知');
+
+        const hasDuration = numeric(record.durationMs) && record.durationMs > 0;
+        const seconds = hasDuration ? record.durationMs / 1000 : null;
+        const durationText = hasDuration ? `${session ? '≈' : ''}${number(seconds, 1)}` : '—';
+        const durationTip = hasDuration
+          ? `${session ? '估算请求耗时' : '精确请求耗时'} ${record.durationMs} 毫秒（${seconds.toFixed(2)} 秒）`
+          : '耗时未知';
+        setValue(find('duration-value'), durationText, durationTip);
+
+        const cacheKnown = numeric(record.cacheHitRate) && record.cacheHitRate <= 1;
+        const pct = cacheKnown ? Math.max(0, Math.min(100, record.cacheHitRate * 100)) : null;
+        const cacheText = pct !== null ? `${pct >= 99.95 ? '100' : number(pct, 1)}%` : '—';
+        setValue(find('cache-value'), cacheText, cacheKnown ? `缓存命中率 ${(record.cacheHitRate * 100).toFixed(2)}%` : '缓存命中率未知');
+        return card;
+      }
+      function render() {
+        if (disposed) return;
+        const records = (current?.records ?? []).filter(record => record && typeof record === 'object')
+          .slice().sort((a, b) => (numeric(b.completedAt) ? b.completedAt : 0) - (numeric(a.completedAt) ? a.completedAt : 0)).slice(0, 100);
+        const working = busy || Boolean(current?.loading);
+        ui.panel.setAttribute('aria-busy', String(working));
+        ui.summary.textContent = `当前对话 · 最近 ${records.length} 次请求`;
+        ui.refresh.disabled = working || !bridge;
+        ui.refresh.classList.toggle('is-busy', working);
+        ui.error.hidden = !problem;
+        ui.error.textContent = problem ? `读取失败：${problem}` : '';
+        ui.loading.hidden = !working;
+        ui.loading.textContent = current ? '正在更新统计…' : '正在读取当前对话…';
+        const warnings = document.createDocumentFragment();
+        for (const text of (current?.warnings ?? []).slice(0, 6)) {
+          const warning = document.createElement('div');
+          warning.className = 'message message-warning';
+          warning.textContent = String(text).slice(0, 1000);
+          warnings.append(warning);
+        }
+        ui.warnings.replaceChildren(warnings);
+        const signature = JSON.stringify([current?.instanceId ?? null, current?.generation ?? null, records]);
+        if (signature !== drawnRecords) {
+          const fragment = document.createDocumentFragment();
+          for (const record of records) fragment.append(recordCard(record));
+          ui.records.replaceChildren(fragment);
+          drawnRecords = signature;
+        }
+        ui.records.hidden = records.length === 0;
+        ui.empty.hidden = records.length > 0 || working || Boolean(problem);
+        ui['empty-text'].textContent = String(current?.emptyMessage || '当前对话还没有可统计的请求记录').slice(0, 1000);
+        ui.updated.hidden = !date(current?.updatedAt);
+        ui.updated.textContent = `更新于 ${timeLabel(current?.updatedAt)}`;
+        if (resetScroll) { resetScroll = false; window.scrollTo(0, 0); }
+      }
+      function accept(next, source) {
+        if (!next || typeof next.instanceId !== 'string' || !next.instanceId || !Number.isFinite(next.generation) || !Array.isArray(next.records)) return false;
+        if (retiredInstances.has(next.instanceId)) return false;
+        if (current && next.instanceId !== current.instanceId) {
+          if (source !== 'push') return false;
+          retiredInstances.add(current.instanceId);
+        } else if (next.generation < (current?.generation ?? -1)) return false;
+        if (current && (next.instanceId !== current.instanceId || next.generation !== current.generation)) resetScroll = true;
+        current = next;
+        problem = '';
+        return true;
+      }
+      async function request(name) {
+        if (busy || disposed || !bridge) return;
+        const pendingRevision = revision;
+        busy = true;
+        problem = '';
+        render();
+        try {
+          const next = await bridge.request(name, undefined, { signal: lifetime.signal, timeoutMs: 30000 });
+          if (!disposed && pendingRevision === revision) accept(next, 'request');
+        } catch (error) {
+          if (!disposed && pendingRevision === revision) problem = String(error?.message || '请稍后重试。').slice(0, 1000);
+        } finally {
+          if (!disposed) { busy = false; render(); }
+        }
+      }
+      function refresh() { void request('tps.refresh'); }
+      function cleanup() {
+        if (disposed) return;
+        disposed = true;
+        lifetime.abort();
+        ui.refresh.removeEventListener('click', refresh);
+        for (const subscription of subscriptions) subscription?.dispose();
+      }
+      ui.refresh.addEventListener('click', refresh);
+      window.addEventListener('pagehide', cleanup, { once: true });
+      if (bridge && typeof bridge.request === 'function' && typeof bridge.on === 'function') {
+        subscriptions.push(bridge.on('tps.changed', next => {
+          if (!disposed && accept(next, 'push')) { revision += 1; render(); }
+        }));
+        if (typeof window.orca.on === 'function') {
+          subscriptions.push(window.orca.on('theme', theme => {
+            if (disposed || !['light', 'dark'].includes(theme?.colorScheme)) return;
+            document.documentElement.classList.remove('light', 'dark');
+            document.documentElement.classList.add(theme.colorScheme);
+          }));
+        }
+        void request('tps.state');
+      } else {
+        problem = '请在 Orca 的「对话 TPS」面板中打开。';
+        render();
+      }
+    })();
+  </script>
+</body>
+</html>

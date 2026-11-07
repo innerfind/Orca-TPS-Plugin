@@ -1,0 +1,71 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "id": "tps-stats",
+  "name": "对话 TPS",
+  "version": "1.3.0",
+  "description": "采用 CC Switch 算法统计单次 API 请求的输出速度、首字时间、模型和缓存命中率（自动剔除工具执行耗时，兼容子代理与本地代理库）。支持 Windows 与 Linux。",
+  "author": {
+    "name": "jecyxyf",
+    "url": "https://github.com/jecyxyf"
+  },
+  "license": "MIT",
+  "repository": "https://github.com/jecyxyf/Orca-TPS-Plugin",
+  "homepage": "https://github.com/jecyxyf/Orca-TPS-Plugin",
+  "icon": "assets/icon.png",
+  "cover": {
+    "path": "assets/cover.png",
+    "alt": "对话 TPS 插件封面：展示 Orca 状态栏实时速度与侧栏单次 API 请求卡片（含精确代理速度、日志估算速度、首字时间与缓存命中率）"
+  },
+  "screenshots": [
+    {
+      "path": "assets/screenshot-dark.png",
+      "alt": "深色主题下的 Orca 工作区与右侧对话 TPS 面板，展示单次请求速度、首字延迟、子代理标签与底部状态栏",
+      "caption": "深色主题：实时跟随当前终端会话，按单次请求展示速度、首字时间与缓存命中率",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/screenshot-light.png",
+      "alt": "浅色主题下的 Orca 工作区与右侧对话 TPS 面板，展示单次请求速度、首字延迟、子代理标签与底部状态栏",
+      "caption": "浅色主题：自动适配 Orca 明暗配色与紧凑侧栏宽度",
+      "theme": "light"
+    }
+  ],
+  "engines": {
+    "orca": ">=1.4.251"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "history",
+        "title": "对话 TPS",
+        "icon": "activity",
+        "entry": "src/panel.html",
+        "ui": "html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "tps.refresh",
+        "title": "刷新对话 TPS"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "speed",
+        "text": "🚀 — tokens/s · 🍪 命中 —",
+        "tone": "success",
+        "tooltip": "最新请求速度与缓存命中率（CC Switch 算法）；右侧对话 TPS 查看请求明细，点击刷新。",
+        "command": "tps.refresh"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    }
+  ]
+}

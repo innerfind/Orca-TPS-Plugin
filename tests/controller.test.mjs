@@ -1,0 +1,242 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createTpsController, validateRoots } from '../src/controller.mjs';
+
+function fakeHost(saved = null) {
+  const handlers = new Map(), statuses = [], posts = [];
+  const register = (name, fn) => { handlers.set(name, fn); return { dispose: () => handlers.delete(name) }; };
+  return { handlers, statuses, posts, orca: {
+    panels: { handle: register, post: (event, data) => posts.push({ event, data }) },
+    commands: { register }, storage: { get: async () => saved },
+    host: { call: async (method, params) => { assert.equal(method, 'statusBar.update'); statuses.push(params); } },
+    log() {}
+  } };
+}
+const target = id => ({ key: `pane:${id}`, provider: 'codex', sessionId: id, transcriptPath: `/private/${id}.jsonl` });
+const result = (id, speed = 10, cache = 0.75, estimated = true) => ({ session: {
+  id: `codex:${id}`, title: id, provider: 'codex', path: `/private/${id}.jsonl`,
+  records: [{ id: `req-${id}-${speed}`, completedAt: 100, outputTokens: 250, durationMs: 25000,
+    tokensPerSecond: speed, isEstimatedSpeed: estimated, cacheHitRate: cache }]
+}, warnings: [] });
+const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('follows the active target and displays latest record speed (with CC Switch ≈ / integer formatting) plus cache', async () => {
+  const host = fakeHost({ selectedId: 'codex:other', roots: { codex: ['/saved'] } });
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('old-open-conversation') }),
+    readSession: async (active, options) => {
+      assert.equal(active.sessionId, 'old-open-conversation');
+      assert.deepEqual(options.roots.codex, ['/saved']);
+      return result(active.sessionId, 26.4, 0.75, true);
+    }, focusPollMs: 0
+  });
+  await controller.start();
+  assert.equal(controller.state().activeSession.id, 'codex:old-open-conversation');
+  assert.equal(host.statuses.at(-1).text, '🚀 ≈26 tokens/s · 🍪 命中 75.0%');
+  assert.ok(!JSON.stringify(controller.state()).includes('/private'));
+  assert.ok(!host.handlers.has('tps.select') && !host.handlers.has('tps.configure'));
+  controller.stop();
+});
+
+test('exact proxy record displays integer speed without ≈ and 99.96% cache rounds to 100%', async () => {
+  const host = fakeHost();
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('proxy-session') }),
+    readSession: async () => ({
+      session: {
+        id: 'codex:proxy-session', title: 'proxy', provider: 'codex', path: '/private/p.jsonl',
+        records: [
+          { id: 'newest', completedAt: 200, outputTokens: 300, durationMs: 4000, firstTokenMs: 1000, generationMs: 3000,
+            dataSource: 'proxy', tokensPerSecond: 85.7, isEstimatedSpeed: false, cacheHitRate: 0.9996 },
+          { id: 'older', completedAt: 100, outputTokens: 200, durationMs: 10000,
+            dataSource: 'codex_session', tokensPerSecond: 20, isEstimatedSpeed: true, cacheHitRate: 0.5 }
+        ]
+      }, warnings: []
+    }),
+    focusPollMs: 0
+  });
+  await controller.start();
+  assert.equal(host.statuses.at(-1).text, '🚀 86 tokens/s · 🍪 命中 100%');
+  controller.stop();
+});
+
+test('switch clears records, timestamp, speed and cache before the next file finishes loading', async () => {
+  const host = fakeHost(), pendingB = deferred();
+  let active = target('a');
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active }),
+    readSession: async value => value.sessionId === 'b' ? pendingB.promise : result('a'), focusPollMs: 0
+  });
+  await controller.start();
+  active = target('b');
+  const refreshing = controller.refresh();
+  await settle();
+  assert.equal(controller.state().activeSession.id, 'codex:b');
+  assert.deepEqual(controller.state().records, []);
+  assert.equal(controller.state().updatedAt, null);
+  assert.equal(host.statuses.at(-1).text, '🚀 — tokens/s · 🍪 命中 —');
+  pendingB.resolve(result('b', 20, 0));
+  await refreshing;
+  assert.equal(host.statuses.at(-1).text, '🚀 ≈20 tokens/s · 🍪 命中 0.0%');
+  controller.stop();
+});
+
+test('a slow previous conversation cannot block or replace the new one', async () => {
+  const host = fakeHost(), pendingA = deferred();
+  let active = target('a');
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active }),
+    readSession: async value => value.sessionId === 'a' ? pendingA.promise : result('b', 20), focusPollMs: 0
+  });
+  const starting = controller.start();
+  await settle();
+  active = target('b');
+  await controller.refresh();
+  pendingA.resolve(result('a', 99));
+  await starting;
+  assert.equal(controller.state().activeSession.id, 'codex:b');
+  assert.equal(controller.state().records[0].tokensPerSecond, 20);
+  assert.ok(!host.posts.some(item => item.data.records.some(record => record.tokensPerSecond === 99)));
+  controller.stop();
+});
+
+test('A to B to A rejects the first A even when the target identity returns', async () => {
+  const host = fakeHost(), reads = [deferred(), deferred(), deferred()];
+  let active = target('a'), count = 0;
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active }), readSession: async () => reads[count++].promise, focusPollMs: 0
+  });
+  const first = controller.start(); await settle();
+  active = target('b'); const second = controller.refresh(); await settle();
+  active = target('a'); const third = controller.refresh(); await settle();
+  reads[2].resolve(result('a', 30)); await third;
+  reads[1].resolve(result('b', 20)); await second;
+  reads[0].resolve(result('a', 10)); await first;
+  assert.equal(controller.state().generation, 3);
+  assert.equal(controller.state().records[0].tokensPerSecond, 30);
+  assert.equal(host.statuses.at(-1).text, '🚀 ≈30 tokens/s · 🍪 命中 75.0%');
+  controller.stop();
+});
+
+test('unknown target and read errors never retain another conversation', async () => {
+  const host = fakeHost(); let active = target('a');
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active, message: active ? '' : '当前页面不是对话。' }),
+    readSession: async value => { if (value.sessionId === 'b') throw new Error('/private/file'); return result('a'); }, focusPollMs: 0
+  });
+  await controller.start();
+  active = null; await controller.refresh();
+  assert.equal(controller.state().activeSession, null);
+  assert.deepEqual(controller.state().records, []);
+  assert.equal(controller.state().emptyMessage, '当前页面不是对话。');
+  active = target('b'); await controller.refresh();
+  assert.deepEqual(controller.state().records, []);
+  assert.equal(controller.state().updatedAt, null);
+  assert.match(controller.state().warnings[0], /读取失败/);
+  assert.ok(!JSON.stringify(controller.state()).includes('/private'));
+  controller.stop();
+});
+
+test('wrong session returned by a reader is rejected and missing numeric data stays unknown', async () => {
+  const host = fakeHost(); let wrong = true;
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('a') }),
+    readSession: async () => wrong ? result('b') : result('a', null, NaN), focusPollMs: 0
+  });
+  await controller.start();
+  assert.deepEqual(controller.state().records, []);
+  wrong = false; await controller.refresh();
+  assert.equal(host.statuses.at(-1).text, '🚀 — tokens/s · 🍪 命中 —');
+  controller.stop();
+});
+
+test('frequent focus checks do not rescan unchanged data before the refresh interval', async () => {
+  const host = fakeHost(); let time = 0, reads = 0, active = target('a');
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active }),
+    readSession: async value => { reads++; return result(value.sessionId); },
+    now: () => time, pollMs: 5000, focusPollMs: 0
+  });
+  await controller.start();
+  time = 1000; await controller.checkActive(); assert.equal(reads, 1);
+  active = target('b'); await controller.checkActive(); assert.equal(reads, 2);
+  time = 6001; await controller.checkActive(); assert.equal(reads, 3);
+  controller.stop();
+});
+
+test('a delayed status-bar call cannot block reading or publishing the newly active conversation', async () => {
+  const host = fakeHost(), blockedStatus = deferred();
+  let active = target('a'), block = false;
+  host.orca.host.call = async (method, params) => {
+    if (block) await blockedStatus.promise;
+    host.statuses.push(params);
+  };
+  const reads = [];
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: active }),
+    readSession: async value => { reads.push(value.sessionId); return result(value.sessionId, value.sessionId === 'a' ? 10 : 20); },
+    focusPollMs: 0
+  });
+  await controller.start(); await settle();
+  block = true;
+  const refreshingA = controller.refresh(); await settle();
+  active = target('b');
+  const refreshingB = controller.refresh(); await settle();
+  assert.equal(reads.at(-1), 'b');
+  assert.equal(controller.state().records[0].tokensPerSecond, 20);
+  assert.equal(host.posts.at(-1).data.activeSession.id, 'codex:b');
+  blockedStatus.resolve();
+  await Promise.all([refreshingA, refreshingB]); await settle();
+  assert.equal(host.statuses.at(-1).text, '🚀 ≈20 tokens/s · 🍪 命中 75.0%');
+  controller.stop();
+});
+
+test('stop unregisters handlers and ignores in-flight file reads', async () => {
+  const host = fakeHost(), pending = deferred();
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('a') }), readSession: async () => pending.promise, focusPollMs: 0
+  });
+  const starting = controller.start(); await settle();
+  controller.stop(); const count = host.posts.length;
+  pending.resolve(result('a')); await starting;
+  assert.equal(host.handlers.size, 0);
+  assert.equal(host.posts.length, count);
+  assert.deepEqual(controller.state().records, []);
+});
+
+test('routine limits stay hidden while actual read problems remain visible', async () => {
+  const host = fakeHost(); let actualError = false;
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('a') }),
+    readSession: async () => ({ ...result('a'), warnings: [
+      '仅读取最近 100 个文件会话及最多 10 个数据库。',
+      'codex：较大会话只读取末尾 16 MiB，缺少开头的轮次不计入。',
+      ...(actualError ? ['读取失败'] : [])
+    ] }), focusPollMs: 0
+  });
+  await controller.start();
+  assert.deepEqual(controller.state().warnings, []);
+  assert.ok(!host.statuses.at(-1).tooltip.includes('部分数据不可用'));
+  actualError = true; await controller.refresh();
+  assert.deepEqual(controller.state().warnings, ['读取失败']);
+  controller.stop();
+});
+
+test('panel delivery failure does not prevent bottom-bar updates', async () => {
+  const host = fakeHost(); host.orca.panels.post = () => { throw new Error('closed panel'); };
+  const controller = createTpsController(host.orca, {
+    readActive: async () => ({ target: target('a') }), readSession: async () => result('a'), focusPollMs: 0
+  });
+  await controller.start();
+  assert.equal(host.statuses.at(-1).text, '🚀 ≈10 tokens/s · 🍪 命中 75.0%');
+  controller.stop();
+});
+
+test('legacy custom roots remain bounded and validated without exposing a settings UI', () => {
+  assert.deepEqual(validateRoots({ codex: [' ~/sessions ', '~/sessions', ''] }).codex, ['~/sessions']);
+  assert.throws(() => validateRoots({ codex: ['https://example.com'] }), /本机/);
+  assert.throws(() => validateRoots({ codex: ['a\nsecret'] }), /路径/);
+  assert.throws(() => validateRoots({ credentials: [] }), /未知/);
+  assert.throws(() => validateRoots({ codex: Array.from({ length: 8 }, (_, i) => `${i}${'a'.repeat(3000)}`) }), /过长/);
+});
