@@ -90,8 +90,9 @@
     .record-card { min-width: 0; padding: 10px 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
     .card-top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(88px, min(40%, 144px)); align-items: center; gap: 12px; }
     .identity { min-width: 0; }
+    .agent { margin: 0 0 1px 25px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; line-height: 1.4; }
     .model-line { display: flex; align-items: center; gap: 5px; min-width: 0; }
-    .model-icon { flex-shrink: 0; font-size: 16px; }
+    .model-icon { flex-shrink: 0; width: 20px; text-align: center; font-size: 16px; }
     .model { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--purple); font-size: 13px; line-height: 1.6; font-weight: 700; }
     .badge { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--tag-bg); color: var(--muted); font-size: 10px; font-weight: 600; line-height: 1.4; }
     .badge-proxy { background: var(--proxy-bg); color: var(--green); }
@@ -127,6 +128,7 @@
       .metrics { gap: 6px; }
       .card-top { gap: 8px; }
       .model { font-size: 12px; }
+      .agent { font-size: 10px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .refresh.is-busy svg { animation: none; }
@@ -164,6 +166,7 @@
     <li class="record-card" data-testid="record-card">
       <div class="card-top">
         <div class="identity">
+          <p class="agent" data-testid="agent" hidden></p>
           <div class="model-line">
             <span class="model-icon" aria-hidden="true">🤖</span>
             <h2 class="model" data-testid="model"></h2>
@@ -271,9 +274,16 @@
       function recordCard(record) {
         const card = ui['record-template'].content.firstElementChild.cloneNode(true);
         const find = name => card.querySelector(`[data-testid="${name}"]`);
-        const model = typeof record.model === 'string' && record.model ? record.model : '模型 —';
-        find('model').textContent = model;
-        find('model').title = model;
+        // Model stays the headline; the agent sits above it. Agents without a model (Antigravity) headline the agent instead.
+        const agent = agentLabel();
+        const model = typeof record.model === 'string' && record.model ? record.model : '';
+        const headline = model || agent || '模型 —';
+        find('model').textContent = headline;
+        find('model').title = headline;
+        const agentLine = find('agent');
+        agentLine.textContent = model && agent ? agent : '';
+        agentLine.title = agentLine.textContent;
+        agentLine.hidden = !agentLine.textContent;
         find('subagent-badge').hidden = !record.isSubagent;
         find('proxy-badge').hidden = record.dataSource !== 'proxy';
         const when = date(record.completedAt);
@@ -307,6 +317,10 @@
         const cacheText = pct !== null ? `${pct >= 99.95 ? '100' : number(pct, 1)}%` : '—';
         setValue(find('cache-value'), cacheText, cacheKnown ? `缓存命中率 ${(record.cacheHitRate * 100).toFixed(2)}%` : '缓存命中率未知');
         return card;
+      }
+      const AGENT_LABELS = { codex: 'Codex CLI', claude: 'Claude Code', opencode: 'OpenCode', opencode2: 'OpenCode', pi: 'Pi Agent', antigravity: 'Antigravity CLI' };
+      function agentLabel() {
+        return AGENT_LABELS[current?.activeSession?.provider] ?? '';
       }
       function render() {
         if (disposed) return;
