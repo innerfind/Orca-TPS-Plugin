@@ -131,9 +131,10 @@ function buildRecord({
   };
 }
 
-export function recentRecords(records) {
+/** Newest first, de-duplicated by id. Session views keep 100; usage totals pass Infinity. */
+export function recentRecords(records, limit = 100) {
   return [...new Map(records.filter(Boolean).map(value => [value.id, value])).values()]
-    .sort((a, b) => b.completedAt - a.completedAt).slice(0, 100);
+    .sort((a, b) => b.completedAt - a.completedAt).slice(0, limit);
 }
 
 const maxOpt = (a, b) => a === null ? b : b === null ? a : Math.max(a, b);
@@ -164,7 +165,8 @@ function codexTokenSignature(info) {
   return JSON.stringify([pick(total), pick(last)]);
 }
 
-function parseCodex(rows, sessionId, { truncated = false } = {}) {
+/** Incremental Codex parser: feed row batches in order, then finish. Same results as one call with all rows. */
+export function createCodexParser(sessionId, { truncated = false, limit = 100 } = {}) {
   const results = [];
   const lastSignatureBySource = new Map();
   let previousTokenSignature = null;
@@ -209,8 +211,10 @@ function parseCodex(rows, sessionId, { truncated = false } = {}) {
     return { latencyMs, firstTokenMs: ttftMs, endMs: endMs ?? tokenCountMs };
   };
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  let rowIndex = 0;
+  const feed = batch => {
+  for (const row of batch) {
+    const i = rowIndex++;
     const atRaw = time(row.timestamp), at = Number.isFinite(atRaw) ? atRaw : null;
     const payload = record(row.payload);
 
@@ -390,10 +394,17 @@ function parseCodex(rows, sessionId, { truncated = false } = {}) {
       model: currentModel
     }));
   }
-  return recentRecords(results);
+  };
+  return { feed, finish: () => recentRecords(results, limit) };
 }
 
-function parseClaude(rows, { isSubagent = false } = {}) {
+function parseCodex(rows, sessionId, options = {}) {
+  const parser = createCodexParser(sessionId, options);
+  parser.feed(rows);
+  return parser.finish();
+}
+
+function parseClaude(rows, { isSubagent = false, limit = 100 } = {}) {
   const chain = new Map();
   const messages = new Map();
   const timings = new Map();
@@ -508,7 +519,7 @@ function parseClaude(rows, { isSubagent = false } = {}) {
       isSubagent: msg.isSubagent
     }));
   }
-  return recentRecords(results);
+  return recentRecords(results, limit);
 }
 
 function piTimestampMs(value) {
@@ -537,7 +548,7 @@ function extractPiTokens(usageObj) {
     ? { input, output, cacheRead, cacheWrite } : null;
 }
 
-function parsePi(rows) {
+function parsePi(rows, { limit = 100 } = {}) {
   const results = [];
   let currentModel = null;
 
@@ -659,7 +670,7 @@ function parsePi(rows) {
       model: name(message.model) ?? currentModel
     }));
   }
-  return recentRecords(results);
+  return recentRecords(results, limit);
 }
 
 const ANTIGRAVITY_TRANSCRIPT_TAIL = ['.system_generated', 'logs', 'transcript.jsonl'];
@@ -806,7 +817,7 @@ export function antigravityNativeTimings(steps, generations) {
  * duration only comes from the native store. Without that store a row keeps its token and cache counters only.
  * Message bodies (content, thinking, tool arguments) are never read.
  */
-function parseAntigravityTranscript(rows, native = new Map()) {
+function parseAntigravityTranscript(rows, native = new Map(), { limit = 100 } = {}) {
   const results = [];
   let selectedModel = null;
   for (const row of rows) {
@@ -837,7 +848,7 @@ function parseAntigravityTranscript(rows, native = new Map()) {
     });
     if (entry) results.push(entry);
   }
-  return recentRecords(results);
+  return recentRecords(results, limit);
 }
 
 /** Returns metadata and counters only. Chat content never leaves this parser. */
@@ -861,15 +872,15 @@ export function parseJsonl(text, provider, headerText = '', options = {}) {
     : provider === 'claude'
       ? parseClaude(rows, options)
       : provider === 'pi'
-        ? parsePi(rows)
+        ? parsePi(rows, options)
         : provider === 'antigravity'
-          ? parseAntigravityTranscript(rows, options.native)
+          ? parseAntigravityTranscript(rows, options.native, options)
           : [];
   return { sessionId, cwd, records };
 }
 
 /** Rows are provider message records in storage order, already limited to one session. */
-export function parseOpenCodeRows(rows, v2 = false) {
+export function parseOpenCodeRows(rows, v2 = false, { limit = 100 } = {}) {
   const byId = new Map();
   for (const row of rows) {
     const data = record(row.data) ?? json(row.data);
@@ -932,7 +943,7 @@ export function parseOpenCodeRows(rows, v2 = false) {
     });
     if (entry) byId.set(entry.id, entry);
   }
-  return recentRecords([...byId.values()]);
+  return recentRecords([...byId.values()], limit);
 }
 
 export function buildProxyRecord(row) {

@@ -20,6 +20,7 @@
       --speed: #c72e3a;
       --speed-bg: #f0f0f3;
       --tag-bg: #ededf2;
+      --heat-0: #ebedf0; --heat-1: #bfdbfe; --heat-2: #7fb6fb; --heat-3: #3b82e6; --heat-4: #1d4fb8;
       --proxy-bg: #e5f7ee;
       --button-bg: #e5f0ff;
       --warning-bg: #fff1dc;
@@ -42,6 +43,7 @@
       --speed: #ff6b72;
       --speed-bg: #303034;
       --tag-bg: #343439;
+      --heat-0: #2a2a2e; --heat-1: #1e3a5f; --heat-2: #2e5f94; --heat-3: #4a8fd6; --heat-4: #8cc4ff;
       --proxy-bg: #193829;
       --button-bg: #163552;
       --warning-bg: #46321b;
@@ -122,6 +124,66 @@
     .empty { margin-top: 16px; padding: 28px 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); text-align: center; }
     .empty-icon { font-size: 26px; }
     .empty-text { margin: 10px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+    .war { margin: 8px 0 0; padding: 12px 14px 8px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .war-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 999px; background: var(--tag-bg); }
+    .war-tab { min-width: 0; padding: 5px 4px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; }
+    .war-tab[aria-selected="true"] { background: var(--surface); color: var(--blue); box-shadow: var(--shadow); }
+    .war-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .war-totals { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; margin: 12px 2px 0; }
+    .war-label { display: block; color: var(--muted); font-size: 11px; }
+    .war-value { display: block; margin-top: 2px; font-size: 24px; line-height: 1.15; font-weight: 750; letter-spacing: -.6px; font-variant-numeric: tabular-nums; }
+    .war-value.tokens { color: var(--blue); }
+    .war-value.requests { color: var(--green); }
+    .war-value small { margin-left: 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+    .war-note { margin: 8px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+    .war-note:empty, .war-note[hidden] { display: none; }
+    .war-rows { margin: 6px 0 0; padding: 0; list-style: none; }
+    .war-row { padding: 8px 2px 7px; border-top: 1px solid var(--line); }
+    .war-row:first-child { border-top: 0; }
+    .war-row-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+    .war-agent { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--tag-bg); color: var(--muted); font-size: 10px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+    .war-model { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .war-amount { flex-shrink: 0; color: var(--blue); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .war-track { height: 4px; margin: 6px 0 4px; border-radius: 2px; background: var(--tag-bg); overflow: hidden; }
+    .war-fill { height: 100%; border-radius: 2px; background: var(--blue); }
+    .war-meta { display: flex; flex-wrap: wrap; gap: 0 10px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .war-meta span { white-space: nowrap; }
+    .war-empty { margin: 10px 2px 2px; color: var(--muted); font-size: 12px; text-align: center; }
+    .war-empty[hidden] { display: none; }
+    .heat { position: relative; margin: 8px 0 0; padding: 10px 14px 8px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .heat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .usage { margin-top: 12px; }
+    .usage-summary { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); cursor: pointer; list-style: none; }
+    .usage-summary::-webkit-details-marker { display: none; }
+    .usage-summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .usage-summary::after { content: "▾"; flex-shrink: 0; color: var(--muted); font-size: 11px; transition: transform .15s ease; }
+    .usage:not([open]) > .usage-summary::after { transform: rotate(-90deg); }
+    .usage-title { flex-shrink: 0; font-size: 12px; font-weight: 700; }
+    .usage-brief { min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .heat-title { font-size: 12px; font-weight: 700; }
+    .heat-sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .heat-scroll { margin: 8px -4px 0; padding: 0 4px 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+    .heat-canvas { position: relative; }
+    .heat-months { position: relative; height: 13px; color: var(--muted); font-size: 9px; }
+    .heat-months span { position: absolute; top: 0; white-space: nowrap; }
+    .heat-grid { display: grid; grid-template-rows: repeat(7, 8px); grid-auto-flow: column; grid-auto-columns: 8px; gap: 2px; }
+    .heat-cell { width: 8px; height: 8px; border-radius: 2px; background: var(--heat-0); }
+    .heat-cell.lv1 { background: var(--heat-1); }
+    .heat-cell.lv2 { background: var(--heat-2); }
+    .heat-cell.lv3 { background: var(--heat-3); }
+    .heat-cell.lv4 { background: var(--heat-4); }
+    .heat-cell.future { visibility: hidden; }
+    .heat-cell:hover { outline: 1px solid var(--blue); outline-offset: 0; }
+    .heat-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; color: var(--muted); font-size: 10px; }
+    .heat-legend { display: inline-flex; align-items: center; gap: 3px; }
+    .heat-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; }
+    .heat-legend .lv0 { background: var(--heat-0); }
+    .heat-legend .lv1 { background: var(--heat-1); }
+    .heat-legend .lv2 { background: var(--heat-2); }
+    .heat-legend .lv3 { background: var(--heat-3); }
+    .heat-legend .lv4 { background: var(--heat-4); }
+    .heat-tip { position: absolute; z-index: 5; max-width: 240px; padding: 5px 8px; border-radius: 8px; background: var(--ink); color: var(--surface); font-size: 11px; line-height: 1.4; white-space: nowrap; pointer-events: none; transform: translate(-50%, -100%); box-shadow: var(--shadow); }
+    .heat-tip[hidden] { display: none; }
     .footer { margin: 15px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
     .footer p { margin: 0; }
     @media (max-width: 339px) {
@@ -149,6 +211,49 @@
       </button>
     </header>
     <div class="message message-error" id="error" data-testid="error" role="alert" hidden></div>
+    <details class="usage" id="usage" data-testid="usage-group">
+      <summary class="usage-summary" data-testid="usage-summary">
+        <span class="usage-title">用量统计</span>
+        <span class="usage-brief" id="usage-brief" data-testid="usage-brief">正在统计…</span>
+      </summary>
+    <section class="war" id="war" aria-label="用量战况">
+      <div class="war-tabs" role="tablist" aria-label="统计范围">
+        <button class="war-tab" type="button" role="tab" data-range="today" aria-selected="true" data-testid="range-today">当日战况</button>
+        <button class="war-tab" type="button" role="tab" data-range="week" aria-selected="false" data-testid="range-week">近一周战况</button>
+        <button class="war-tab" type="button" role="tab" data-range="month" aria-selected="false" data-testid="range-month">近一月战况</button>
+      </div>
+      <div class="war-totals">
+        <div>
+          <span class="war-label">消耗 token（含缓存读写）</span>
+          <strong class="war-value tokens" id="war-tokens" data-testid="war-tokens">—</strong>
+        </div>
+        <div>
+          <span class="war-label">请求</span>
+          <strong class="war-value requests" id="war-requests" data-testid="war-requests">—</strong>
+        </div>
+      </div>
+      <p class="war-note" id="war-note" data-testid="war-note" hidden></p>
+      <ol class="war-rows" id="war-rows" data-testid="war-rows" aria-label="按 agent 与模型的消耗"></ol>
+      <p class="war-empty" id="war-empty" data-testid="war-empty" hidden>这段时间还没有用量记录</p>
+    </section>
+    <section class="heat" id="heat" data-testid="heatmap">
+      <div class="heat-head">
+        <span class="heat-title">用量热力图</span>
+        <span class="heat-sub" id="heat-sub">近一年每日 token（含缓存）</span>
+      </div>
+      <div class="heat-scroll" id="heat-scroll">
+        <div class="heat-canvas">
+          <div class="heat-months" id="heat-months" aria-hidden="true"></div>
+          <div class="heat-grid" id="heat-grid" role="img" aria-label="近一年每日 token 消耗热力图"></div>
+        </div>
+      </div>
+      <div class="heat-foot">
+        <span id="heat-total" data-testid="heat-total"></span>
+        <span class="heat-legend" aria-hidden="true">少 <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> 多</span>
+      </div>
+      <div class="heat-tip" id="heat-tip" role="tooltip" hidden></div>
+    </section>
+    </details>
     <div class="messages" id="warnings"></div>
     <p class="loading" id="loading" data-testid="loading" role="status" aria-live="polite">正在读取当前对话…</p>
     <ol class="records" id="records" aria-label="单次请求速度记录"></ol>
@@ -318,10 +423,162 @@
         setValue(find('cache-value'), cacheText, cacheKnown ? `缓存命中率 ${(record.cacheHitRate * 100).toFixed(2)}%` : '缓存命中率未知');
         return card;
       }
+      // 用量战况: totals per window from the background index (tps.summary); counts only, never message text.
+      const USAGE_REFRESH_MS = 30_000;
       const AGENT_LABELS = { codex: 'Codex CLI', claude: 'Claude Code', opencode: 'OpenCode', opencode2: 'OpenCode', pi: 'Pi Agent', antigravity: 'Antigravity CLI' };
       function agentLabel() {
         return AGENT_LABELS[current?.activeSession?.provider] ?? '';
       }
+      let usageSummary = null, usageRange = 'today', usageProblem = '', usageTimer = null;
+      function formatCount(value) {
+        if (!numeric(value)) return '—';
+        if (value >= 1e8) return `${(value / 1e8).toFixed(value >= 1e10 ? 0 : 2)}亿`;
+        if (value >= 1e4) return `${(value / 1e4).toFixed(value >= 1e6 ? 0 : 1)}万`;
+        return Math.round(value).toLocaleString('zh-CN');
+      }
+      function usageRow(row, max) {
+        const item = document.createElement('li');
+        item.className = 'war-row';
+        const head = document.createElement('div');
+        head.className = 'war-row-head';
+        const agent = document.createElement('span');
+        agent.className = 'war-agent';
+        agent.textContent = AGENT_LABELS[row.provider] ?? String(row.provider || 'agent').slice(0, 40);
+        const model = document.createElement('span');
+        model.className = 'war-model';
+        model.textContent = row.model || '未知模型';
+        model.title = model.textContent;
+        const amount = document.createElement('span');
+        amount.className = 'war-amount';
+        amount.textContent = formatCount(row.tokens);
+        head.append(agent, model, amount);
+        const track = document.createElement('div');
+        track.className = 'war-track';
+        const fill = document.createElement('div');
+        fill.className = 'war-fill';
+        fill.style.width = `${max > 0 && numeric(row.tokens) ? Math.max(2, Math.round((row.tokens / max) * 100)) : 0}%`;
+        track.append(fill);
+        const meta = document.createElement('div');
+        meta.className = 'war-meta';
+        for (const part of [`${formatCount(row.requests)} 次请求`, `新输入 ${formatCount(row.freshInput)}`, `输出 ${formatCount(row.output)}`, `缓存读取 ${formatCount(row.cacheRead)}`]) {
+          const span = document.createElement('span');
+          span.textContent = part;
+          meta.append(span);
+        }
+        item.append(head, track, meta);
+        return item;
+      }
+      function renderUsage() {
+        const range = usageSummary?.windows?.[usageRange] ?? null;
+        const today = usageSummary?.windows?.today;
+        byId('usage-brief').textContent = today
+          ? `当日 ${formatCount(today.tokens)} · ${formatCount(today.requests)} 次`
+          : (usageProblem || '正在统计…');
+        for (const tab of document.querySelectorAll('[data-range]')) {
+          tab.setAttribute('aria-selected', String(tab.dataset.range === usageRange));
+        }
+        byId('war-tokens').textContent = range ? formatCount(range.tokens) : '—';
+        byId('war-requests').textContent = range ? formatCount(range.requests) : '—';
+        const list = Array.isArray(range?.rows) ? range.rows : [];
+        const max = list.reduce((top, row) => Math.max(top, numeric(row.tokens) ? row.tokens : 0), 0);
+        byId('war-rows').replaceChildren(...list.map(row => usageRow(row, max)));
+        byId('war-empty').hidden = !usageSummary || list.length > 0;
+        const notes = [];
+        if (usageProblem) notes.push(usageProblem);
+        const progress = usageSummary?.progress;
+        if (progress && progress.done < progress.total) notes.push(`正在统计历史记录 ${progress.done}/${progress.total}，数字会逐步完善`);
+        if (range && numeric(range.cacheHitRate)) notes.push(`缓存命中率 ${(range.cacheHitRate * 100).toFixed(1)}%`);
+        if (range && numeric(range.hiddenRows) && range.hiddenRows > 0) notes.push(`另有 ${range.hiddenRows} 个模型未列出`);
+        byId('war-note').textContent = notes.join(' · ');
+        byId('war-note').hidden = notes.length === 0;
+        renderHeatmap();
+      }
+      async function loadUsage() {
+        if (!bridge || disposed || typeof bridge.request !== 'function') return;
+        try {
+          usageSummary = await bridge.request('tps.summary', undefined, { signal: lifetime.signal, timeoutMs: 30000 });
+          usageProblem = '';
+        } catch (error) {
+          if (!disposed) usageProblem = String(error?.message || '用量统计暂不可用').slice(0, 200);
+        }
+        if (!disposed) renderUsage();
+      }
+      for (const tab of document.querySelectorAll('[data-range]')) {
+        tab.addEventListener('click', () => { usageRange = tab.dataset.range; renderUsage(); });
+      }
+      // 用量热力图: one cell per local day for the last year; weeks are columns (Sunday first), five levels by quartile.
+      const HEAT_DAYS = 365;
+      const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+      const localKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      const dayLabel = date => `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 周${WEEKDAYS[date.getDay()]}`;
+      function renderHeatmap() {
+        const grid = byId('heat-grid'), months = byId('heat-months');
+        const byDay = new Map((usageSummary?.daily ?? []).map(entry => [entry.day, entry]));
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const start = new Date(today);
+        start.setDate(today.getDate() - (HEAT_DAYS - 1));
+        start.setDate(start.getDate() - start.getDay());
+        const weeks = Math.ceil((Math.round((today - start) / 86_400_000) + 1) / 7);
+        const values = [...byDay.values()].map(entry => entry.tokens).filter(value => numeric(value) && value > 0).sort((a, b) => a - b);
+        const quantile = p => values.length ? values[Math.min(values.length - 1, Math.floor(values.length * p))] : 0;
+        const [t1, t2, t3] = [quantile(0.25), quantile(0.5), quantile(0.75)];
+        const levelOf = tokens => (tokens <= 0 ? 0 : tokens <= t1 ? 1 : tokens <= t2 ? 2 : tokens <= t3 ? 3 : 4);
+        const cells = [], labels = [];
+        let lastMonth = -1, activeDays = 0, total = 0;
+        for (let week = 0; week < weeks; week++) {
+          for (let weekday = 0; weekday < 7; weekday++) {
+            const date = new Date(start);
+            date.setDate(start.getDate() + week * 7 + weekday);
+            const future = date > today;
+            const entry = byDay.get(localKey(date));
+            const tokens = future ? 0 : (numeric(entry?.tokens) ? entry.tokens : 0);
+            if (!future && tokens > 0) { activeDays += 1; total += tokens; }
+            const cell = document.createElement('span');
+            cell.className = `heat-cell lv${levelOf(tokens)}${future ? ' future' : ''}`;
+            cell.dataset.tokens = String(tokens);
+            cell.dataset.requests = String(numeric(entry?.requests) ? entry.requests : 0);
+            cell.dataset.label = dayLabel(date);
+            cell.setAttribute('aria-label', `${cell.dataset.label}：${tokens > 0 ? `${formatCount(tokens)} token` : '无用量'}`);
+            cells.push(cell);
+            if (weekday === 0 && !future && date.getMonth() !== lastMonth) {
+              lastMonth = date.getMonth();
+              const label = document.createElement('span');
+              label.textContent = `${lastMonth + 1}月`;
+              label.style.left = `${week * 10}px`;
+              labels.push(label);
+            }
+          }
+        }
+        grid.replaceChildren(...cells);
+        months.replaceChildren(...labels);
+        byId('heat-total').textContent = usageSummary ? `近一年 ${formatCount(total)} token · ${activeDays} 天有用量` : '正在统计…';
+      }
+      const heatTip = byId('heat-tip');
+      function showHeatTip(cell) {
+        heatTip.textContent = Number(cell.dataset.tokens) > 0
+          ? `${cell.dataset.label} · ${formatCount(Number(cell.dataset.tokens))} token · ${formatCount(Number(cell.dataset.requests))} 次请求`
+          : `${cell.dataset.label} · 无用量记录`;
+        heatTip.hidden = false;
+        const host = byId('heat').getBoundingClientRect(), rect = cell.getBoundingClientRect();
+        const half = heatTip.offsetWidth / 2;
+        const left = Math.min(Math.max(rect.left - host.left + rect.width / 2, half + 4), host.width - half - 4);
+        heatTip.style.left = `${left}px`;
+        heatTip.style.top = `${rect.top - host.top - 6}px`;
+      }
+      byId('heat-grid').addEventListener('pointerover', event => {
+        const cell = event.target.closest?.('.heat-cell');
+        if (cell && !cell.classList.contains('future')) showHeatTip(cell);
+        else heatTip.hidden = true;
+      });
+      byId('heat-grid').addEventListener('pointerleave', () => { heatTip.hidden = true; });
+      byId('heat-scroll').addEventListener('scroll', () => { heatTip.hidden = true; }, { passive: true });
+      const usageGroup = byId('usage');
+      usageGroup.addEventListener('toggle', () => {
+        if (!usageGroup.open) return;
+        const scroller = byId('heat-scroll');
+        scroller.scrollLeft = scroller.scrollWidth;   // open on the latest weeks, as GitHub does
+      });
       function render() {
         if (disposed) return;
         const records = (current?.records ?? []).filter(record => record && typeof record === 'object')
@@ -391,6 +648,7 @@
         lifetime.abort();
         ui.refresh.removeEventListener('click', refresh);
         for (const subscription of subscriptions) subscription?.dispose();
+        clearInterval(usageTimer);
       }
       ui.refresh.addEventListener('click', refresh);
       window.addEventListener('pagehide', cleanup, { once: true });
@@ -406,6 +664,8 @@
           }));
         }
         void request('tps.state');
+        void loadUsage();
+        usageTimer = setInterval(() => void loadUsage(), USAGE_REFRESH_MS);
       } else {
         problem = '请在 Orca 的「对话 TPS」面板中打开。';
         render();

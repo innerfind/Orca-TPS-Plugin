@@ -1,4 +1,6 @@
-import { open, readdir, realpath, stat } from 'node:fs/promises';
+import { open, readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -6,6 +8,7 @@ import { configuredRoots, defaultRoots } from './data-paths.mjs';
 import {
   SESSION_PROXY_DEDUP_WINDOW_SECONDS,
   antigravityNativeTimings,
+  createCodexParser,
   antigravitySessionIdFromPath,
   antigravityStepStart,
   mergeProxyRecords,
@@ -13,6 +16,7 @@ import {
   parseOpenCodeRows,
   recentRecords
 } from './parsers.mjs';
+import { HISTORY_DAYS, accumulateRecords, dayKeyAgo } from './usage-summary.mjs';
 
 const MAX_FILES = 1500, MAX_DIRECTORIES = 500, MAX_DEPTH = 8, MAX_SUBAGENT_FILES = 200;
 const MAX_FILE_BYTES = 16 * 1024 * 1024, MAX_SCAN_BYTES = 64 * 1024 * 1024;
@@ -510,6 +514,231 @@ export async function readTargetSession(target, options = {}) {
     trimCache(locationCache);
   }
   return finish(bestSession(sessions));
+}
+
+// ---- Usage totals: every session written in the last 30 days, read whole, once per change. ----
+
+const USAGE_MAX_FILE_BYTES = 256 * 1024 * 1024, USAGE_MAX_UNITS = 20_000, USAGE_MAX_DIRECTORIES = 5_000;
+
+/** Every JSONL session file under a root that was written at or after cutoffMs; subagent folders are skipped. */
+async function walkRecentJsonl(root, cutoffMs) {
+  const rootStat = await info(root);
+  if (!rootStat?.isDirectory()) return [];
+  const found = [], queue = [root], seen = new Set();
+  while (queue.length && seen.size < USAGE_MAX_DIRECTORIES) {
+    const directory = queue.pop();
+    let canonical, entries;
+    try {
+      canonical = await realpath(directory);
+      if (seen.has(canonical)) continue;
+      seen.add(canonical);
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch { continue; }
+    for (const entry of entries) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!skippedDirectories.has(entry.name.toLowerCase())) queue.push(file);
+      } else if (entry.isFile() && /\.jsonl$/i.test(entry.name)) {
+        const metadata = await info(file);
+        if (metadata?.isFile() && metadata.mtimeMs >= cutoffMs) found.push({ path: file, size: metadata.size, mtimeMs: metadata.mtimeMs });
+      }
+    }
+  }
+  return found;
+}
+
+const USAGE_STREAM_BATCH_ROWS = 2_000;
+const usageObject = value => value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+const usageText = value => typeof value === 'string' && value.trim() && value.length <= 256 ? value.trim() : null;
+
+/** Feeds parsed rows to onBatch in order, one 4 MB read at a time; a trailing unfinished line is not evidence yet. */
+async function streamJsonRows(file, onBatch) {
+  const decoder = new StringDecoder('utf8');
+  let carry = '', batch = [];
+  for await (const chunk of createReadStream(file, { highWaterMark: 4 * 1024 * 1024 })) {
+    const pieces = (carry + decoder.write(chunk)).split('\n');
+    carry = pieces.pop();
+    for (const line of pieces) {
+      const row = parsedRow(line);
+      if (row) batch.push(row);
+      if (batch.length >= USAGE_STREAM_BATCH_ROWS) { await onBatch(batch); batch = []; }
+    }
+  }
+  if (batch.length) await onBatch(batch);
+}
+
+function parsedRow(line) {
+  try { return usageObject(JSON.parse(line)); } catch { return null; }
+}
+
+/** Codex keeps its session id in the first session_meta row, as parseJsonl reads it. */
+async function codexSessionId(file) {
+  const handle = await open(file, 'r');
+  try {
+    const size = Math.min(65_536, (await handle.stat()).size);
+    const buffer = Buffer.alloc(size), { bytesRead } = await handle.read(buffer, 0, size, 0);
+    for (const line of buffer.subarray(0, bytesRead).toString('utf8').split('\n').slice(0, 30)) {
+      const row = parsedRow(line);
+      if (row?.type === 'session_meta') return usageText(usageObject(row.payload)?.id);
+    }
+    return null;
+  } finally { await handle.close(); }
+}
+
+/** Codex rollouts can be over a gigabyte, so they stream through the incremental parser rather than being read whole. */
+export async function readCodexUsageFile(file, minDay) {
+  const days = {};
+  await addCodexStreamRecords(days, file, minDay);
+  return days;
+}
+
+async function addCodexStreamRecords(days, file, minDay) {
+  const parser = createCodexParser(await codexSessionId(file), { limit: Infinity });
+  await streamJsonRows(file, batch => parser.feed(batch));
+  accumulateRecords(days, 'codex', parser.finish(), { minDay });
+}
+
+async function addFileRecords(days, provider, file, minDay, isSubagent) {
+  const metadata = await info(file);
+  if (!metadata?.isFile()) return;
+  if (metadata.size > USAGE_MAX_FILE_BYTES) throw Object.assign(new Error('会话文件过大'), { code: 'too_large' });
+  const text = await readFile(file, 'utf8');
+  const complete = text.slice(0, text.lastIndexOf('\n') + 1);
+  const parsed = parseJsonl(complete, provider, '', { isSubagent, limit: Infinity });
+  accumulateRecords(days, provider, parsed.records, { minDay });
+}
+
+async function fileUsageUnit(provider, file) {
+  // Claude keeps subagent calls in <session>/subagents; they belong to the parent session's unit.
+  const subagents = provider === 'claude'
+    ? (await collectClaudeSubagentCandidates(file.path, path.basename(file.path, '.jsonl'))).map(candidate => ({ path: candidate.path, size: candidate.info.size, mtimeMs: candidate.info.mtimeMs }))
+    : [];
+  const stamp = [identity(file.path), file.size, file.mtimeMs, ...subagents.map(item => `${item.size}:${item.mtimeMs}`)].join(':');
+  return {
+    // A switch between mirrored files replaces the same logical unit, including its retained counts.
+    key: identity(`${provider}|${path.basename(file.path)}`),
+    stamp,
+    bytes: file.size + subagents.reduce((sum, item) => sum + item.size, 0),
+    mtimeMs: file.mtimeMs,
+    read: async () => {
+      const minDay = dayKeyAgo(Date.now(), HISTORY_DAYS - 1), days = {};
+      if (provider === 'codex') await addCodexStreamRecords(days, file.path, minDay);
+      else await addFileRecords(days, provider, file.path, minDay, false);
+      for (const item of subagents) await addFileRecords(days, 'claude', item.path, minDay, true);
+      return days;
+    }
+  };
+}
+
+async function readOpenCodeSession(dbPath, v2, sessionId) {
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
+  try {
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; PRAGMA trusted_schema=OFF;');
+    const messageTable = v2 ? 'session_message' : 'message', orderColumn = v2 ? 'seq' : 'rowid';
+    const rows = db.prepare(`SELECT id,${v2 ? 'type' : 'NULL AS type'},time_created,${projectedData()}
+      FROM ${messageTable} WHERE session_id=? ORDER BY ${orderColumn} ASC`).all(sessionId);
+    const days = {};
+    accumulateRecords(days, v2 ? 'opencode2' : 'opencode', parseOpenCodeRows(rows, v2, { limit: Infinity }),
+      { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1) });
+    return days;
+  } finally { db.close(); }
+}
+
+/** One unit per OpenCode session updated since cutoffMs; the unit's stamp includes its message count. */
+async function openCodeUsageUnits(dbPath, cutoffMs) {
+  const database = await info(dbPath);
+  if (!database?.isFile()) return [];
+  let DatabaseSync;
+  try { ({ DatabaseSync } = await import('node:sqlite')); }
+  catch { return []; }
+  const units = [];
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; PRAGMA trusted_schema=OFF;');
+    const available = tables(db);
+    for (const v2 of [false, true]) {
+      const table = v2 ? 'session_v2' : 'session', messageTable = v2 ? 'session_message' : 'message';
+      if (!available.has(table) || !available.has(messageTable)) continue;
+      const sessionColumns = columns(db, table);
+      if (!sessionColumns.has('id') || !sessionColumns.has('time_updated')) continue;
+      const provider = v2 ? 'opencode2' : 'opencode';
+      for (const row of db.prepare(`SELECT id, time_updated FROM ${table} WHERE time_updated >= ?`).all(cutoffMs)) {
+        const count = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${messageTable} WHERE session_id=?`).get(row.id)?.n ?? 0);
+        units.push({
+          key: identity(`${provider}|${dbPath}|${row.id}`),
+          stamp: `${row.time_updated}:${count}`,
+          bytes: count * 1024,
+          mtimeMs: Number(row.time_updated) || 0,
+          read: () => readOpenCodeSession(dbPath, v2, row.id)
+        });
+      }
+    }
+  } catch { /* An unreadable database contributes no OpenCode units this pass. */ }
+  finally { db?.close(); }
+  return units;
+}
+
+/** Antigravity: one unit per conversation whose transcript was written since cutoffMs; timing comes from its native store. */
+async function antigravityUsageUnits(brainRoot, cutoffMs) {
+  if (!(await info(brainRoot))?.isDirectory()) return [];
+  let entries;
+  try { entries = await readdir(brainRoot, { withFileTypes: true }); }
+  catch { return []; }
+  const units = [];
+  for (const entry of entries.slice(0, USAGE_MAX_UNITS)) {
+    if (!entry.isDirectory() || !safeSegment(entry.name)) continue;
+    const transcript = path.join(brainRoot, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
+    const metadata = await info(transcript);
+    if (!metadata?.isFile() || metadata.mtimeMs < cutoffMs) continue;
+    units.push({
+      key: identity(`antigravity|${transcript}`),
+      stamp: `${metadata.size}:${metadata.mtimeMs}:${await antigravityNativeStamp(transcript)}`,
+      bytes: metadata.size,
+      mtimeMs: metadata.mtimeMs,
+      read: () => readAntigravityUsage(transcript, entry.name)
+    });
+  }
+  return units;
+}
+
+async function readAntigravityUsage(transcript, conversationId) {
+  const days = {}, notes = [];
+  const text = await readFile(transcript, 'utf8');
+  const complete = text.slice(0, text.lastIndexOf('\n') + 1);
+  const native = await readAntigravityTimings(transcript, message => notes.push(message));
+  const parsed = parseJsonl(complete, 'antigravity', '', { sessionId: conversationId, native, limit: Infinity });
+  accumulateRecords(days, 'antigravity', parsed.records, { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1) });
+  return days;
+}
+
+/** Descriptors for the usage index: Codex, Claude and Pi session files, OpenCode sessions, and Antigravity conversations. */
+export async function discoverUsageUnits(cutoffMs, options = {}) {
+  const roots = await configuredRoots(options.roots, options.includeDefaults !== false);
+  // Mirrors are append-only transcripts. Keep the largest copy; use its modification time to break ties.
+  // A sync can give a stale copy a newer mtime, so root order and mtime alone cannot identify the fullest log.
+  const units = [];
+  for (const provider of ['codex', 'claude', 'pi']) {
+    const selected = new Map();
+    for (const root of (roots[provider] ?? []).slice(0, 100)) {
+      for (const file of await walkRecentJsonl(root, cutoffMs)) {
+        const filename = path.basename(file.path), previous = selected.get(filename);
+        if (!previous && units.length + selected.size >= USAGE_MAX_UNITS) continue;
+        if (!previous || file.size > previous.size || (file.size === previous.size && file.mtimeMs > previous.mtimeMs)) {
+          selected.set(filename, file);
+        }
+      }
+    }
+    for (const file of selected.values()) units.push(await fileUsageUnit(provider, file));
+  }
+  for (const root of (roots.opencode ?? []).slice(0, 10)) {
+    units.push(...await openCodeUsageUnits(root, cutoffMs));
+  }
+  for (const root of (roots.antigravity ?? []).slice(0, 10)) {
+    units.push(...await antigravityUsageUnits(root, cutoffMs));
+  }
+  return units;
 }
 
 /** Discover only configured provider roots. Optional includeDefaults:false isolates tests/custom scans. */
