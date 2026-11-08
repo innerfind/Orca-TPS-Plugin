@@ -5,6 +5,9 @@ import { createHash } from 'node:crypto';
 import { configuredRoots, defaultRoots } from './data-paths.mjs';
 import {
   SESSION_PROXY_DEDUP_WINDOW_SECONDS,
+  antigravityNativeTimings,
+  antigravitySessionIdFromPath,
+  antigravityStepStart,
   mergeProxyRecords,
   parseJsonl,
   parseOpenCodeRows,
@@ -33,6 +36,24 @@ async function info(file) {
   try { return await stat(file); } catch { return null; }
 }
 
+/**
+ * Antigravity keeps brain/<conversation-id>/.system_generated/logs/ with the live transcript plus rotated
+ * copies. Only the transcript is read; a recursive walk over the whole brain tree would hit directory limits.
+ */
+async function discoverAntigravityTranscripts(root, sourceWarnings) {
+  const files = [];
+  let entries;
+  try { entries = await readdir(root, { withFileTypes: true }); }
+  catch (error) { sourceWarnings.add(`antigravity：部分会话目录无法读取（${shortError(error)}）。`); return files; }
+  for (const entry of entries) {
+    if (files.length >= MAX_FILES) { sourceWarnings.add('antigravity：文件发现达到上限，仅扫描部分会话目录。'); break; }
+    if (!entry.isDirectory() || !safeSegment(entry.name)) continue;
+    const file = path.join(root, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
+    if ((await info(file))?.isFile()) files.push(file);
+  }
+  return files;
+}
+
 async function discover(provider, root, warnings) {
   const key = `${provider}:${root}`, cached = discoveryCache.get(key);
   if (cached && Date.now() - cached.at < 20_000) {
@@ -43,10 +64,18 @@ async function discover(provider, root, warnings) {
     warnings.add(`${provider}：请选择会话目录，不能扫描整个磁盘或用户主目录。`);
     return [];
   }
-  const files = [], queue = [{ directory: root, depth: 0 }], sourceWarnings = new Set();
-  let visited = 0, limited = false;
   const rootStat = await info(root);
   if (!rootStat) return [];
+  if (provider === 'antigravity' && rootStat.isDirectory()) {
+    const sourceWarnings = new Set();
+    const files = await discoverAntigravityTranscripts(root, sourceWarnings);
+    const result = { at: Date.now(), files, warnings: [...sourceWarnings] };
+    replayWarnings(warnings, result);
+    discoveryCache.set(key, result); trimCache(discoveryCache);
+    return files;
+  }
+  const files = [], queue = [{ directory: root, depth: 0 }], sourceWarnings = new Set();
+  let visited = 0, limited = false;
   const matches = file => provider === 'opencode' ? /\.(?:db|sqlite|sqlite3)$/i.test(file) : /\.jsonl$/i.test(file);
   if (rootStat.isFile()) return matches(root) ? [root] : [];
   const seen = new Set();
@@ -83,9 +112,55 @@ async function discover(provider, root, warnings) {
   return files;
 }
 
+/** conversations/<conversation-id>.db sits beside brain/ in the same Antigravity root. */
+function antigravityNativeDbPath(transcriptPath) {
+  const sessionId = antigravitySessionIdFromPath(transcriptPath);
+  if (!sessionId || !safeSegment(sessionId)) return null;
+  const brainDir = path.dirname(path.dirname(path.dirname(path.dirname(transcriptPath))));
+  if (path.basename(brainDir) !== 'brain') return null;
+  return path.join(path.dirname(brainDir), 'conversations', `${sessionId}.db`);
+}
+
+async function antigravityNativeStamp(transcriptPath) {
+  const dbPath = antigravityNativeDbPath(transcriptPath);
+  const database = dbPath ? await info(dbPath) : null;
+  if (!database?.isFile()) return 'native:none';
+  const wal = await info(`${dbPath}-wal`);
+  return `native:${database.size}:${database.mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
+}
+
+/** Read-only: model-response step metadata and generation metadata only; step payloads are never opened. */
+async function readAntigravityTimings(transcriptPath, note) {
+  const dbPath = antigravityNativeDbPath(transcriptPath);
+  const database = dbPath ? await info(dbPath) : null;
+  if (!database?.isFile()) return new Map();
+  let DatabaseSync;
+  try { ({ DatabaseSync } = await import('node:sqlite')); }
+  catch { note('antigravity：当前运行时不支持 SQLite，耗时与模型暂不显示。'); return new Map(); }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=500; PRAGMA trusted_schema=OFF;');
+    const steps = db.prepare('SELECT idx, metadata FROM steps WHERE step_type = 15').all();
+    const generationQuery = db.prepare('SELECT data FROM gen_metadata WHERE idx = ?');
+    const generations = new Map();
+    for (const step of steps) {
+      const index = antigravityStepStart(step.metadata)?.generationIndex;
+      if (index === null || index === undefined || generations.has(index)) continue;
+      const row = generationQuery.get(index);
+      if (row?.data) generations.set(index, row.data);
+    }
+    return antigravityNativeTimings(steps, generations);
+  } catch (error) {
+    note(`antigravity：原生会话库无法读取（${shortError(error)}），耗时与模型暂不显示。`);
+    return new Map();
+  } finally { db?.close(); }
+}
+
 async function readJsonl(candidate, budget, warnings, expectedSessionId, { isSubagent = false } = {}) {
   const key = `${candidate.provider}:${candidate.path}:${isSubagent ? 'sub' : 'main'}`;
-  const stamp = `${candidate.info.size}:${candidate.info.mtimeMs}`;
+  const stamp = `${candidate.info.size}:${candidate.info.mtimeMs}` +
+    (candidate.provider === 'antigravity' ? `:${await antigravityNativeStamp(candidate.path)}` : '');
   const cached = parseCache.get(key);
   const matches = result => {
     if (expectedSessionId === undefined) return true;
@@ -116,7 +191,11 @@ async function readJsonl(candidate, budget, warnings, expectedSessionId, { isSub
     }
     // Writers append JSONL a line at a time; an unfinished final line is not evidence.
     text = text.slice(0, text.lastIndexOf('\n') + 1);
-    const parsed = parseJsonl(text, candidate.provider, header, { truncated: offset > 0, isSubagent });
+    const pathSessionId = candidate.provider === 'antigravity' ? antigravitySessionIdFromPath(candidate.path) : null;
+    const native = candidate.provider === 'antigravity'
+      ? await readAntigravityTimings(candidate.path, message => sourceWarnings.push(message))
+      : undefined;
+    const parsed = parseJsonl(text, candidate.provider, header, { truncated: offset > 0, isSubagent, sessionId: pathSessionId, native });
     const sessionId = parsed.sessionId || path.basename(candidate.path, '.jsonl');
     const session = { id: `${candidate.provider}:${sessionId || identity(candidate.path)}`,
       title: `${candidate.provider} · ${sessionId.slice(-20)}`, provider: candidate.provider,
@@ -342,7 +421,7 @@ async function headerSessionId(candidate, budget) {
 /** Read only the explicitly selected conversation; absence never selects another session. */
 export async function readTargetSession(target, options = {}) {
   const warnings = new Set(), budget = { remaining: MAX_SCAN_BYTES };
-  if (!target || !['codex', 'claude', 'opencode', 'opencode2', 'pi'].includes(target.provider)
+  if (!target || !['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity'].includes(target.provider)
       || typeof target.sessionId !== 'string' || !target.sessionId || target.sessionId.length > 256) {
     return { session: null, warnings: ['当前会话尚未识别，等待会话记录。'] };
   }
@@ -405,6 +484,8 @@ export async function readTargetSession(target, options = {}) {
   const files = new Set();
   for (const root of providerRoots) for (const file of await discover(rootProvider, root, warnings)) files.add(file);
   const filenameMatches = file => {
+    // Antigravity's file is always transcript.jsonl; the conversation id is its directory name.
+    if (target.provider === 'antigravity') return antigravitySessionIdFromPath(file) === target.sessionId;
     const name = path.basename(file, path.extname(file));
     return name === target.sessionId || name.endsWith(`-${target.sessionId}`) || name.endsWith(`_${target.sessionId}`);
   };
@@ -421,7 +502,8 @@ export async function readTargetSession(target, options = {}) {
   if (isDatabase) for (const file of files) await visit(file, false);
   else {
     for (const file of named) await visit(file, false);
-    if (!sessions.length) for (const file of files) if (!filenameMatches(file)) await visit(file, true);
+    // Header lookup only helps formats with a session header; Antigravity IDs come from the path alone.
+    if (!sessions.length && target.provider !== 'antigravity') for (const file of files) if (!filenameMatches(file)) await visit(file, true);
   }
   if (matchedPaths.length) {
     locationCache.set(lookupKey, { at: Date.now(), paths: [...new Set(matchedPaths)] });

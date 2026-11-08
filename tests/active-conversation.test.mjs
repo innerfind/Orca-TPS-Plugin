@@ -143,7 +143,7 @@ test('a capture rollback cannot weaken the next terminal-reuse baseline', () => 
 });
 
 test('supported providers retain exact IDs and OpenCode database paths', () => {
-  for (const agent of ['codex', 'claude', 'opencode', 'opencode2', 'pi']) {
+  for (const agent of ['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity']) {
     const s = state();
     s.sleepingAgentSessionsByPaneKey['a:leaf'].agent = agent;
     s.tabsByWorktree.work[0].aiVaultTitle.agent = agent;

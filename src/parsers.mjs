@@ -662,6 +662,184 @@ function parsePi(rows) {
   return recentRecords(results);
 }
 
+const ANTIGRAVITY_TRANSCRIPT_TAIL = ['.system_generated', 'logs', 'transcript.jsonl'];
+
+/** brain/<conversation-id>/.system_generated/logs/transcript.jsonl -> conversation id, otherwise null. */
+export function antigravitySessionIdFromPath(file) {
+  if (typeof file !== 'string') return null;
+  const parts = file.split(/[\\/]+/).filter(Boolean);
+  if (parts.length < 4 || parts.slice(-3).join('/') !== ANTIGRAVITY_TRANSCRIPT_TAIL.join('/')) return null;
+  return name(parts[parts.length - 4]);
+}
+
+// Antigravity's native store is protobuf. This wire reader keeps only the fields used here: no schema, no dependencies.
+function protoFields(bytes, depth = 0) {
+  if (!(bytes instanceof Uint8Array) || depth > 4) return null;
+  const fields = new Map();
+  let at = 0;
+  const varint = () => {
+    let value = 0, scale = 1;
+    for (let n = 0; n < 10; n++) {
+      if (at >= bytes.length) return null;
+      const byte = bytes[at++];
+      value += (byte & 0x7f) * scale;
+      scale *= 128;
+      if (!(byte & 0x80)) return value;
+    }
+    return null;
+  };
+  while (at < bytes.length) {
+    const key = varint();
+    if (key === null) return null;
+    const field = Math.floor(key / 8), wire = key % 8;
+    let value = null;
+    if (wire === 0) value = varint();
+    else if (wire === 2) {
+      const length = varint();
+      if (length === null || at + length > bytes.length) return null;
+      value = bytes.subarray(at, at + length); at += length;
+    } else if (wire === 1 || wire === 5) {
+      const size = wire === 1 ? 8 : 4;
+      if (at + size > bytes.length) return null;
+      value = bytes.subarray(at, at + size); at += size;
+    } else return null;
+    if (value === null) return null;
+    if (!fields.has(field)) fields.set(field, []);
+    fields.get(field).push({ wire, value });
+  }
+  return fields;
+}
+const protoLast = (fields, number, wire) => fields?.get(number)?.filter(item => item.wire === wire).at(-1)?.value ?? null;
+const protoVarint = (fields, number) => {
+  const value = protoLast(fields, number, 0);
+  return typeof value === 'number' ? value : null;
+};
+const protoBytes = (fields, number) => protoLast(fields, number, 2);
+const protoText = (fields, number) => {
+  const bytes = protoBytes(fields, number);
+  return bytes ? new TextDecoder().decode(bytes) : null;
+};
+// google.protobuf.Timestamp and Duration share the seconds + nanos layout. proto3 omits zero values,
+// so a present message with no seconds field means zero seconds (a sub-second duration).
+function protoSecondsMs(bytes) {
+  const fields = protoFields(bytes);
+  if (!fields) return null;
+  const seconds = protoVarint(fields, 1) ?? 0, nanos = protoVarint(fields, 2) ?? 0;
+  return seconds * 1000 + Math.floor(nanos / 1_000_000);
+}
+
+/** Model-response step metadata: request start (field 1) and the generation it used (field 20.3). */
+export function antigravityStepStart(metadata) {
+  const fields = protoFields(metadata);
+  if (!fields) return null;
+  return {
+    createdMs: protoSecondsMs(protoBytes(fields, 1)),
+    generationIndex: protoVarint(protoFields(protoBytes(fields, 20)), 3)
+  };
+}
+
+/** Generation metadata: model display name (1.21), model family (1.19), first-token wait (1.11), stream time (1.12). */
+export function antigravityGeneration(data) {
+  const response = protoFields(protoBytes(protoFields(data), 1));
+  if (!response) return null;
+  return {
+    model: antigravityModelId(protoText(response, 21)),
+    baseModel: antigravityModelId(protoText(response, 19)),
+    firstTokenMs: protoSecondsMs(protoBytes(response, 11)),
+    streamMs: protoSecondsMs(protoBytes(response, 12))
+  };
+}
+
+/**
+ * "Gemini 3.8 Flash (High)" -> "gemini-3.8-flash-high", the ID agy's model list uses. Anything that is not a
+ * plausible single label, or is "unknown", yields null.
+ */
+export function antigravityModelId(label) {
+  const value = typeof label === 'string' ? label.trim() : '';
+  if (!value || value.length > 128 || value.toLowerCase() === 'unknown' || /[\u0000-\u001f\u007f]/.test(value)) return null;
+  if (!value.includes(' ')) return value;
+  return value.toLowerCase().replace(' (', '-').replace(/[()]/g, '').split(/\s+/).filter(Boolean).join('-') || null;
+}
+
+/**
+ * agy writes its model switches into the conversation text: changed setting `Model Selection` from X to Y.
+ * Only the new model label is kept; the rest of the message is never stored.
+ */
+function modelSelectionFrom(content) {
+  const start = content.indexOf('Model Selection');
+  if (start < 0) return null;
+  const rest = content.slice(start);
+  const to = rest.indexOf(' to ');
+  if (to < 0) return null;
+  const tail = rest.slice(to + 4);
+  let end = tail.length;
+  for (const marker of ['. ', '\n', '`']) {
+    const at = tail.indexOf(marker);
+    if (at >= 0 && at < end) end = at;
+  }
+  const id = antigravityModelId(tail.slice(0, end).replace(/\.$/, ''));
+  return id && id.toLowerCase() !== 'none' ? id : null;
+}
+
+/**
+ * Per model-response step, from Antigravity's native store: the request's own start, its model ID, and exact
+ * timing. Latency is the first-token wait plus the stream time, both written by agy itself to the millisecond.
+ * `steps` are { idx, metadata } rows; `generations` maps a generation index to its metadata bytes.
+ */
+export function antigravityNativeTimings(steps, generations) {
+  const timings = new Map();
+  for (const step of steps) {
+    const start = antigravityStepStart(step.metadata);
+    if (!start || start.createdMs === null) continue;
+    const generation = start.generationIndex === null ? null : antigravityGeneration(generations.get(start.generationIndex));
+    const firstTokenMs = generation?.firstTokenMs ?? null, streamMs = generation?.streamMs ?? null;
+    const latencyMs = firstTokenMs !== null && streamMs !== null && firstTokenMs + streamMs > 0 ? firstTokenMs + streamMs : null;
+    const model = generation?.model ?? null, baseModel = generation?.baseModel ?? null;
+    if (latencyMs === null && !model && !baseModel) continue;
+    timings.set(Number(step.idx), { createdMs: start.createdMs, latencyMs, firstTokenMs, model, baseModel });
+  }
+  return timings;
+}
+
+/**
+ * Antigravity CLI writes one JSON object per model step. Its created_at is the request start, not its end, so
+ * duration only comes from the native store. Without that store a row keeps its token and cache counters only.
+ * Message bodies (content, thinking, tool arguments) are never read.
+ */
+function parseAntigravityTranscript(rows, native = new Map()) {
+  const results = [];
+  let selectedModel = null;
+  for (const row of rows) {
+    if (typeof row.content === 'string' && row.content.includes('Model Selection')) {
+      selectedModel = modelSelectionFrom(row.content) ?? selectedModel;
+    }
+    const stepIndex = count(row.step_index);
+    const inputTokens = count(row.input_tokens), outputTokens = count(row.output_tokens), cacheReadTokens = count(row.cache_read_tokens);
+    if (stepIndex === null || (inputTokens === null && outputTokens === null && cacheReadTokens === null)) continue;
+    const timing = native.get(stepIndex) ?? null;
+    // Model priority: the generation's own display name, then the latest selection, then the bare family name.
+    const model = timing?.model ?? selectedModel ?? timing?.baseModel ?? null;
+    const hasLatency = timing?.latencyMs != null;
+    const entry = buildRecord({
+      id: `antigravity_session:${stepIndex}`,
+      rawId: String(stepIndex),
+      completedAt: hasLatency ? timing.createdMs + timing.latencyMs : time(row.created_at),
+      ...(timing ? { createdAtSec: Math.floor(timing.createdMs / 1000) } : {}),
+      dataSource: 'antigravity_session',
+      inputTokens: inputTokens ?? 0,
+      cacheReadTokens: cacheReadTokens ?? 0,
+      cacheCreationTokens: 0,
+      cacheInclusive: false,
+      outputTokens: outputTokens ?? 0,
+      durationMs: hasLatency ? timing.latencyMs : null,
+      firstTokenMs: timing?.firstTokenMs ?? null,
+      model
+    });
+    if (entry) results.push(entry);
+  }
+  return recentRecords(results);
+}
+
 /** Returns metadata and counters only. Chat content never leaves this parser. */
 export function parseJsonl(text, provider, headerText = '', options = {}) {
   const parse = value => value.split('\n').map(json).filter(Boolean);
@@ -676,13 +854,17 @@ export function parseJsonl(text, provider, headerText = '', options = {}) {
       sessionId ??= name(row.sessionId); cwd ??= name(row.cwd);
     }
   }
+  // Antigravity transcripts have no header; the conversation id comes from the directory path.
+  if (provider === 'antigravity') sessionId = name(options.sessionId);
   const records = provider === 'codex'
     ? parseCodex(rows, sessionId, options)
     : provider === 'claude'
       ? parseClaude(rows, options)
       : provider === 'pi'
         ? parsePi(rows)
-        : [];
+        : provider === 'antigravity'
+          ? parseAntigravityTranscript(rows, options.native)
+          : [];
   return { sessionId, cwd, records };
 }
 
