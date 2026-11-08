@@ -18,7 +18,7 @@
 - **底部状态栏实时跟随**：自动识别当前焦点工作区、页签与终端分屏，实时展示最新一次 API 请求的输出速度与缓存命中率（如 `🚀 ≈68 tokens/s · 🍪 命中 99.2%` 或代理精确模式 `🚀 86 tokens/s`），点击即可立即刷新。
 - **侧栏请求级明细卡片**：在右侧活动栏打开「对话 TPS」，查看当前对话最近 100 次 API 请求的**模型名称、完成时间、首字延迟（TTFT）、输出 Token、请求耗时、输出速度与缓存命中率**，并自动标记 `子代理` 与 `代理` 来源。
 - **严格剔除工具运行耗时**：不再用整轮挂钟时间充当分母，避免本地编译、测试脚本执行或权限确认弹窗拉低模型真实生成速度。
-- **完整支持四大 CLI 与子代理**：原生解析本机终端中的 **Claude Code**（含 `<SESSION_ID>/subagents` 与 `workflows` 子代理）、**Codex CLI**、**OpenCode（v1 / v2）** 与 **Pi Agent**，并支持只读融合 `~/.cc-switch/cc-switch.db` 本地路由代理的精确首字记录。
+- **完整支持四大 CLI 与子代理**：原生解析本机终端中的 **Claude Code**（含 `<SESSION_ID>/subagents` 与 `workflows` 子代理）、**Codex CLI**、**OpenCode（v1 / v2）**、**Pi Agent** 与 **Antigravity CLI**，并支持只读融合 `~/.cc-switch/cc-switch.db` 本地路由代理的精确首字记录。
 - **隐私与只读安全设计**：零网络请求、不上传任何数据、不写入或修改任何会话文件与外部数据库；对话提示词（Prompt）与回复正文绝不离开解析器进入面板或日志。
 
 ---
@@ -41,6 +41,7 @@
 | **Codex CLI** | `RequestTimer` 状态机锁定首条模型输出前的最近边界（`turn_context`、用户消息、工具 `*_output`、前序 `token_count`） | 优先取匹配的 `token_usage_record` 时间戳或工具输出前的模型输出终点，否则取 `token_count` | 从 `item_completed`（`Reasoning` / `AgentMessage`）的 `started_at_ms` 提取估算首字；支持 `limit_id` 快照去重与模型名归一化 |
 | **OpenCode v1 / v2** | 消息记录 `time.created`（缺省回退 `time_created`） | **优先取 `time.streamed`**（流式生成结束时刻，不含后续工具执行），缺省回退 `time.completed` | 输出量计为 `tokens.output + tokens.reasoning`；同时支持 v2 `compaction` 消息 |
 | **Pi Agent** | 优先读取显式 `duration`，否则取 `message.timestamp` | `entry.timestamp` | 支持展开官方 `subagent` 工具调用结果的用量明细（不继承父工具完成耗时） |
+| **Antigravity CLI** | 原生会话库中该步骤自身的请求开始时间（`created`） | 开始时间 + 首字等待 + 流式时间，均为 agy 自身记录的毫秒值 | 首字时间即首字等待。模型名依次取：生成记录的显示名、最近一次「Model Selection」切换、模型族基础名。token 来自 transcript，`input_tokens` 不含缓存读取。没有原生库时只显示 token 和缓存 |
 
 ### 2. 精确速度 vs 日志估算速度门槛
 
@@ -98,6 +99,7 @@ Set-Location "$env:USERPROFILE\Applications\orca-tps-plugin"
 | **Claude** | `~/.claude/projects`（含 `<SESSION_ID>/subagents`）、Orca 托管 Claude 账户目录 |
 | **OpenCode / OpenCode 2** | `~/.local/share/opencode/opencode.db`（支持 `OPENCODE_DB`、`XDG_DATA_HOME`） |
 | **Pi** | `~/.pi/agent/sessions`（支持 `PI_CODING_AGENT_DIR`） |
+| **Antigravity CLI** | token：`~/.gemini/antigravity-cli/brain/<会话ID>/.system_generated/logs/transcript.jsonl`（只读实时 transcript，忽略轮转副本）。模型与耗时：`~/.gemini/antigravity-cli/conversations/<会话ID>.db`（只读，仅读取步骤与生成记录的元数据） |
 | **CC Switch 代理库（可选）** | `~/.cc-switch/cc-switch.db`（支持 `CC_SWITCH_DB_PATH`） |
 
 ---
