@@ -20,7 +20,7 @@ Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-t
 - **Live Status Bar Tracking**: Automatically follows the active Orca workspace, tab, and split terminal pane to display the latest API request's output speed and cache hit rate (e.g., `🚀 ≈68 tokens/s · 🍪 命中 99.2%` or exact proxy mode `🚀 86 tokens/s`). Click to refresh immediately.
 - **Per-Request Sidebar Cards**: Open the sidebar panel to inspect the latest 100 API requests in the active conversation — including **model ID, completion timestamp, TTFT, output tokens, request duration, TPS, and cache hit rate**, with automatic badges for subagents (`子代理`) and local routing proxy (`代理`).
 - **Tool Execution Time Excluded**: Measures individual API call durations instead of whole-turn wall-clock time, so local builds, test suites, shell commands, and approval dialogs never distort model generation speed.
-- **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, and **Pi Agent**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
+- **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, **Pi Agent**, and **Antigravity CLI**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
 - **Strict Read-Only & Privacy-First**: Zero network requests, zero writes to agent transcripts or external databases, and zero prompt/response content exposure outside the local parser.
 
 ---
@@ -43,6 +43,7 @@ Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-t
 | **Codex CLI** | `RequestTimer` locks onto the latest boundary (`turn_context`, user message, `*_output` tool result, or prior `token_count`) before first model output | Prefers matching `token_usage_record` timestamp or last model output before tool execution; falls back to `token_count` | Extracts TTFT from `item_completed` (`Reasoning` / `AgentMessage`) `started_at_ms`; deduplicates `limit_id` snapshots and normalizes model IDs |
 | **OpenCode v1 / v2** | Message `time.created` (falls back to `time_created`) | **Prefers `time.streamed`** (end of streaming before tool execution); falls back to `time.completed` | Counts `tokens.output + tokens.reasoning` together; supports v2 `compaction` rows |
 | **Pi Agent** | Explicit `duration` when present, else `message.timestamp` | `entry.timestamp` | Unpacks official `subagent` `toolResult` usage records without inheriting parent tool completion latency |
+| **Antigravity CLI** | The step's own request start from agy's native store (`created`) | Start + first-token wait + stream time, all written by agy to the millisecond | TTFT is the first-token wait. Model is the generation's display name, then the latest `Model Selection` change, then the family name. Token counts come from the transcript, and `input_tokens` excludes cache reads. Without the native store only tokens and cache are shown |
 
 ### 2. Exact Proxy Speed vs. Session-Log Estimated Speed
 
@@ -102,6 +103,7 @@ The plugin reads the exact transcript/database path recorded by Orca for the foc
 | **Claude** | `~/.claude/projects` (including `<SESSION_ID>/subagents`), managed Claude profiles |
 | **OpenCode / OpenCode 2** | `~/.local/share/opencode/opencode.db` (respects `OPENCODE_DB`, `XDG_DATA_HOME`) |
 | **Pi** | `~/.pi/agent/sessions` (respects `PI_CODING_AGENT_DIR`) |
+| **Antigravity CLI** | Tokens: `~/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/logs/transcript.jsonl` (live transcript only; rotated copies are ignored). Model and timing: `~/.gemini/antigravity-cli/conversations/<conversation-id>.db` (read-only; only step and generation metadata are read) |
 | **CC Switch Proxy DB (Optional)** | `~/.cc-switch/cc-switch.db` (respects `CC_SWITCH_DB_PATH`) |
 
 ---

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Antigravity CLI support** (`antigravity` agent): token counts and cache hit rate come from the live `brain/<conversation-id>/.system_generated/logs/transcript.jsonl` (rotated copies are ignored). `input_tokens` is treated as excluding cache reads.
+- Antigravity model, TTFT, and request latency come from its native store `conversations/<conversation-id>.db`, read-only and limited to step and generation metadata. Model priority: generation display name, then the latest `Model Selection` change, then the family name. Without the native store only tokens and cache are shown.
+
 ## [1.3.0] - 2026-11-07
 
 ### Changed
