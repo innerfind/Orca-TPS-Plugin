@@ -113,7 +113,57 @@ export function selectActiveConversation(state, options = {}) {
   return { target };
 }
 
-/** Reads one committed SQLite document per poll, including live WAL; never writes Orca state. */
+const MAX_STATE_BYTES = 8 * 1024 * 1024;
+const hasTable = (db, name) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
+const hasColumn = (db, table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
+
+/**
+ * Newer Orca builds keep workspaceSession as per-key rows in profile_state_document_parts and only
+ * rewrite the legacy document occasionally. Like Orca's own reader, the parts are authoritative only
+ * when their legacy_revision matches the legacy document's revision; otherwise return null.
+ */
+function readWorkspaceParts(db) {
+  if (!hasTable(db, 'profile_state_document_parts') || !hasTable(db, 'profile_state_document_parts_meta')
+    || !hasColumn(db, 'profile_state_documents', 'revision')) return null;
+  const meta = db.prepare("SELECT legacy_revision FROM profile_state_document_parts_meta WHERE domain='workspaceSession'").get();
+  const legacy = db.prepare("SELECT revision FROM profile_state_documents WHERE domain='workspaceSession'").get();
+  if (!Number.isSafeInteger(meta?.legacy_revision) || meta.legacy_revision !== legacy?.revision) return null;
+  const rows = db.prepare("SELECT part_key, payload FROM profile_state_document_parts WHERE domain='workspaceSession' ORDER BY ordinal").all();
+  if (!rows.length) return null;
+  let bytes = 0, state = {};
+  for (const row of rows) {
+    bytes += row.part_key.length + row.payload.length;
+    if (bytes > MAX_STATE_BYTES) return null;
+    const keys = JSON.parse(row.part_key), value = JSON.parse(row.payload);
+    if (!Array.isArray(keys) || keys.length > 8 || !keys.every(key => typeof key === 'string')) return null;
+    if (!keys.length) { state = value; continue; }
+    let node = state;
+    for (const key of keys.slice(0, -1)) {
+      if (!object(own(node, key))) Object.defineProperty(node, key, { value: {}, enumerable: true, writable: true, configurable: true });
+      node = node[key];
+    }
+    Object.defineProperty(node, keys.at(-1), { value, enumerable: true, writable: true, configurable: true });
+  }
+  return object(state);
+}
+
+/**
+ * Cheap change marker for workspaceSession: Orca bumps these revisions on every save, so an
+ * unchanged stamp means the selection cannot have changed. Null when the schema has no revisions.
+ */
+function workspaceStamp(db) {
+  if (!hasColumn(db, 'profile_state_documents', 'revision')) return null;
+  const legacy = db.prepare("SELECT revision FROM profile_state_documents WHERE domain='workspaceSession'").get();
+  const parts = hasTable(db, 'profile_state_document_parts_meta')
+    ? db.prepare("SELECT revision, legacy_revision FROM profile_state_document_parts_meta WHERE domain='workspaceSession'").get()
+    : null;
+  return JSON.stringify([legacy?.revision ?? null, parts?.revision ?? null, parts?.legacy_revision ?? null]);
+}
+
+let lastSelection = null;
+const copySelection = result => result.target ? { ...result, target: { ...result.target } } : { ...result };
+
+/** Reads one committed SQLite snapshot per poll, including live WAL; never writes Orca state. */
 export async function readActiveConversation(options = {}) {
   const userDataPath = activeProfileUserData(options);
   let profileId;
@@ -133,11 +183,26 @@ export async function readActiveConversation(options = {}) {
   try {
     db = new DatabaseSync(path.join(userDataPath, 'profiles', profileId, 'profile-state.db'), { readOnly: true, enableExtensionLoading: false });
     db.exec('PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=100;');
-    const row = db.prepare("SELECT payload FROM profile_state_documents WHERE domain='workspaceSession' AND length(payload)<=8388608").get();
-    if (!row) return empty('Orca 尚未保存当前工作区状态。');
-    const state = JSON.parse(row.payload);
+    // One read transaction so the stamp, the legacy document and its parts come from the same commit.
+    db.exec('BEGIN');
+    const revision = workspaceStamp(db);
+    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform, revision]);
+    if (cacheKey && lastSelection?.key === cacheKey) return copySelection(lastSelection.result);
+    let state = null;
+    try { state = readWorkspaceParts(db); }
+    catch { state = null; }
+    if (!state) {
+      const row = db.prepare(`SELECT payload FROM profile_state_documents WHERE domain='workspaceSession' AND length(payload)<=${MAX_STATE_BYTES}`).get();
+      if (!row) return empty('Orca 尚未保存当前工作区状态。');
+      state = JSON.parse(row.payload);
+    }
     if (!object(state)) return empty('Orca 当前工作区状态无效。');
-    return selectActiveConversation(state, { ...options, userDataPath, profileId });
+    const result = selectActiveConversation(state, { ...options, userDataPath, profileId });
+    lastSelection = cacheKey ? { key: cacheKey, result: copySelection(result) } : null;
+    return result;
   } catch { return empty('暂时无法读取 Orca 当前对话。'); }
-  finally { db?.close(); }
+  finally {
+    try { if (db?.isTransaction) db.exec('COMMIT'); } catch { /* read-only snapshot */ }
+    db?.close();
+  }
 }
