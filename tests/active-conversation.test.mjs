@@ -183,6 +183,60 @@ test('reader sees committed WAL tab changes without writing database or reading 
   } finally { db.close(); }
 });
 
+// Orca >= 1.4.255 splits workspaceSession into per-key parts and only rewrites the legacy document occasionally.
+function writeSplitState(db, legacy, live, { legacyRevision = 7 } = {}) {
+  db.exec(`CREATE TABLE profile_state_documents(domain TEXT PRIMARY KEY, payload TEXT, revision INTEGER);
+    CREATE TABLE profile_state_document_parts_meta(domain TEXT PRIMARY KEY, revision INTEGER, legacy_revision INTEGER);
+    CREATE TABLE profile_state_document_parts(domain TEXT, part_key TEXT, ordinal INTEGER, payload TEXT, PRIMARY KEY(domain, part_key));`);
+  db.prepare('INSERT INTO profile_state_documents VALUES(?,?,?)').run('workspaceSession', JSON.stringify(legacy), 7);
+  db.prepare('INSERT INTO profile_state_document_parts_meta VALUES(?,?,?)').run('workspaceSession', 9, legacyRevision);
+  const part = db.prepare('INSERT INTO profile_state_document_parts VALUES(?,?,?,?)');
+  let ordinal = 0;
+  for (const [key, value] of Object.entries(live)) {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      for (const [inner, innerValue] of Object.entries(value)) part.run('workspaceSession', JSON.stringify([key, inner]), ordinal++, JSON.stringify(innerValue));
+    } else part.run('workspaceSession', JSON.stringify([key]), ordinal++, JSON.stringify(value));
+  }
+}
+
+test('split workspace parts win over the stale legacy document', sqlite, async t => {
+  const root = await fixture(t), db = new DatabaseSync(path.join(root, 'profiles', 'selected', 'profile-state.db'));
+  try {
+    const live = state();
+    live.tabGroups.work[0].activeTabId = 'b';
+    writeSplitState(db, state(), live);
+  } finally { db.close(); }
+  assert.equal((await readActiveConversation({ userDataPath: root, platform: 'linux' })).target.sessionId, 'session-b');
+});
+
+test('split parts based on another legacy revision are ignored', sqlite, async t => {
+  const root = await fixture(t), db = new DatabaseSync(path.join(root, 'profiles', 'selected', 'profile-state.db'));
+  try {
+    const live = state();
+    live.tabGroups.work[0].activeTabId = 'b';
+    writeSplitState(db, state(), live, { legacyRevision: 6 });
+  } finally { db.close(); }
+  assert.equal((await readActiveConversation({ userDataPath: root, platform: 'linux' })).target.sessionId, 'session-a');
+});
+
+test('unchanged workspace revision reuses the last selection; a new revision re-reads', sqlite, async t => {
+  const root = await fixture(t), file = path.join(root, 'profiles', 'selected', 'profile-state.db');
+  const live = state();
+  live.tabGroups.work[0].activeTabId = 'b';
+  const setup = new DatabaseSync(file);
+  try { writeSplitState(setup, state(), live); } finally { setup.close(); }
+  const read = async () => (await readActiveConversation({ userDataPath: root, platform: 'linux' })).target.sessionId;
+  assert.equal(await read(), 'session-b');
+  const db = new DatabaseSync(file);
+  try {
+    // Same revision: the payload is not re-parsed, so the edit stays invisible.
+    db.prepare("UPDATE profile_state_document_parts SET payload=? WHERE part_key=?").run(JSON.stringify([{ id: 'g', activeTabId: 'a' }]), JSON.stringify(['tabGroups', 'work']));
+    assert.equal(await read(), 'session-b');
+    db.prepare("UPDATE profile_state_document_parts_meta SET revision=10 WHERE domain='workspaceSession'").run();
+    assert.equal(await read(), 'session-a');
+  } finally { db.close(); }
+});
+
 test('profile index validates membership and traversal; valid backup remains usable', sqlite, async t => {
   const root = await fixture(t), index = path.join(root, 'orca-profile-index.json');
   const db = new DatabaseSync(path.join(root, 'profiles', 'selected', 'profile-state.db'));

@@ -9,7 +9,7 @@
 
 ![Orca Tokens & Per-Request TPS Stats Cover](./assets/cover.png)
 
-Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-token (TTFT)**, and **prompt-cache hit rate** statistics plugin for **Orca IDE (`>= 1.4.251`)**. Powered by a zero-dependency calculation engine 100% aligned with [CC Switch](https://github.com/farion1231/cc-switch), automatically excluding local tool execution and permission wait times across **Linux** and **Windows**.
+Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-token (TTFT)**, and **prompt-cache hit rate** statistics plugin for **Orca IDE (`>= 1.4.251`, tested & optimized for `1.4.255+`)**. Powered by a zero-dependency calculation engine 100% aligned with [CC Switch](https://github.com/farion1231/cc-switch), automatically excluding local tool execution and permission wait times across **Linux** and **Windows**.
 
 > 📖 **中文说明 / Chinese Guide**: 请查看 **[简体中文完整文档 (README.zh-CN.md)](./README.zh-CN.md)**。
 
@@ -17,7 +17,7 @@ Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-t
 
 ## Key Features
 
-- **Live Status Bar Tracking**: Automatically follows the active Orca workspace, tab, and split terminal pane to display the latest API request's output speed and cache hit rate (e.g., `🚀 ≈68 tokens/s · 🍪 命中 99.2%` or exact proxy mode `🚀 86 tokens/s`). Click to refresh immediately.
+- **Live Status Bar Tracking**: Automatically follows the active Orca workspace, tab, and split terminal pane (with 250ms low-overhead polling and full support for Orca 1.4.255+ split document-parts storage) to display the latest API request's output speed and cache hit rate (e.g., `🚀 ≈68 tokens/s · 🍪 命中 99.2%` or exact proxy mode `🚀 86 tokens/s`). Click to refresh immediately.
 - **Per-Request Sidebar Cards**: Open the sidebar panel to inspect the latest 100 API requests in the active conversation — including **model ID, completion timestamp, TTFT, output tokens, request duration, TPS, and cache hit rate**, with automatic badges for subagents (`子代理`) and local routing proxy (`代理`).
 - **Tool Execution Time Excluded**: Measures individual API call durations instead of whole-turn wall-clock time, so local builds, test suites, shell commands, and approval dialogs never distort model generation speed.
 - **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, **Pi Agent**, and **Antigravity CLI**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
@@ -91,6 +91,14 @@ Set-Location "$env:USERPROFILE\Applications\orca-tps-plugin"
 ```
 
 > **Note**: Keep the cloned directory in place while loaded in local development mode. To unload it later, run `orca plugin dev unload <directory>`.
+
+### Orca Version Compatibility
+
+| Orca Version | Status | Storage Schema Supported |
+| :--- | :--- | :--- |
+| **`>= 1.4.255`** | **Fully supported & optimized** (Tested on `1.4.255`) | Supports split document parts (`profile_state_document_parts`) with fast 250ms focus switching |
+| **`1.4.251 - 1.4.254`** | Supported | Supports monolithic workspace session document (`profile_state_documents`) |
+| **`< 1.4.251`** | Unsupported | Requires Orca plugin API v2 & status bar update support (`>= 1.4.251`) |
 
 ---
 

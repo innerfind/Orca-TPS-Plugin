@@ -41,7 +41,7 @@ const TRANSIENT_PAGE_PATTERNS = [
 ];
 
 export function createTpsController(orca, {
-  readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 1000,
+  readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 250,
   holdActivityMs = 120_000
 } = {}) {
   const instanceId = randomUUID();
