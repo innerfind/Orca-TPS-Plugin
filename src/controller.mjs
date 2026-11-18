@@ -53,7 +53,7 @@ const TRANSIENT_PAGE_PATTERNS = [
 
 export function createTpsController(orca, {
   readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 250,
-  holdActivityMs = 120_000
+  holdActivityMs = 120_000, onTargetChange = () => {}, onOpenTargets = () => {}, cache
 } = {}) {
   const instanceId = randomUUID();
   let target = null, key = null, sessionsSig = '', session = null;
@@ -62,9 +62,10 @@ export function createTpsController(orca, {
   let emptyMessage = '正在识别当前频道…';
   let stopped = false, started = false;
   let contextPending = null, loadTask = null, timer = null;
-  let lastReadAt = -Infinity, lastStatus = '', publishSequence = 0;
+  let lastReadAt = -Infinity, lastStatus = '', lastSnapshot = '', publishSequence = 0;
   let holdUntil = -Infinity, dataStamp = '';
-  let statusQueue = Promise.resolve();
+  let statusQueue = Promise.resolve(), openTargets = [];
+  const projectReads = new Map(), channelReadAt = new Map(), backgroundReads = new Set();
   const registrations = [];
 
   function state() {
@@ -96,7 +97,10 @@ export function createTpsController(orca, {
 
   function publish() {
     if (stopped) return Promise.resolve();
-    const snapshot = state(), sequence = ++publishSequence;
+    const snapshot = state(), signature = JSON.stringify(snapshot);
+    if (signature === lastSnapshot) return statusQueue;
+    lastSnapshot = signature;
+    const sequence = ++publishSequence;
     try { orca.panels.post('tps.changed', snapshot); }
     catch { orca.log('面板推送暂未送达，打开右侧对话 TPS 可重新读取。'); }
     // Fresh data extends the retention window; stale-only snapshots do not.
@@ -128,6 +132,16 @@ export function createTpsController(orca, {
     return statusQueue;
   }
 
+  function rememberOpenTargets(context, current) {
+    if (!Array.isArray(context?.openTargets)) return;
+    openTargets = context.openTargets;
+    const visible = current && !openTargets.some(item => targetKey(item) === targetKey(current))
+      ? [current, ...openTargets] : openTargets;
+    onOpenTargets(visible);
+    const keys = new Set(visible.map(targetKey));
+    for (const value of channelReadAt.keys()) if (!keys.has(value)) channelReadAt.delete(value);
+  }
+
   async function syncActive() {
     if (contextPending) return contextPending;
     const task = (async () => {
@@ -144,6 +158,7 @@ export function createTpsController(orca, {
       // transient: change nothing (target/key/session stay on the last conversation,
       // which keeps refreshing); only soften the status message.
       if (!next && withinHold && TRANSIENT_PAGE_PATTERNS.some(pattern => rawMessage.includes(pattern))) {
+        rememberOpenTargets(context, target);
         const message = cleanText(`${rawMessage} · 保留最近统计，将在对话恢复后自动刷新。`, 300);
         if (message !== emptyMessage) {
           emptyMessage = message;
@@ -156,16 +171,18 @@ export function createTpsController(orca, {
       const messageChanged = message !== emptyMessage;
       let loadingCleared = false;
       if (changed) {
+        const saved = cache && isChannelTarget(next) ? await cache.get(publicChannelId(next)) : null;
+        if (stopped) return;
         generation += 1;
         key = nextKey;
         sessionsSig = nextSessionsSig;
-        session = null;
+        session = saved ? { provider: 'channel', records: saved.records } : null;
         warnings = [];
-        updatedAt = null;
+        updatedAt = saved?.updatedAt ?? null;
         lastReadAt = -Infinity;
         holdUntil = -Infinity;
         dataStamp = '';
-        loading = Boolean(next);
+        loading = Boolean(next && !saved);
       } else {
         if (!next && loading) {
           loading = false;
@@ -178,11 +195,50 @@ export function createTpsController(orca, {
       }
       target = next;
       emptyMessage = message;
+      rememberOpenTargets(context, next);
+      if (changed) onTargetChange(target);
       if (changed || messageChanged || loadingCleared) void publish();
     })();
     contextPending = task;
     try { await task; }
     finally { if (contextPending === task) contextPending = null; }
+  }
+
+  function readProject(requestedTarget, force) {
+    const options = { roots: structuredClone(roots), ...(force ? { fresh: true } : {}) };
+    if (!cache || !isChannelTarget(requestedTarget)) return readSession(requestedTarget, options);
+    const channel = targetKey(requestedTarget);
+    if (projectReads.has(channel)) return projectReads.get(channel);
+    channelReadAt.set(channel, now());
+    const id = publicChannelId(requestedTarget);
+    const pending = (async () => {
+      await cache.get(id);
+      if (stopped) return { session: null, warnings: [] };
+      const result = await readSession(requestedTarget, options);
+      if (stopped || !matchesTarget(result.session, requestedTarget)) return result;
+      const saved = cache.set(id, result.session.records);
+      return { ...result, cachedAt: saved.updatedAt, session: { ...result.session, records: saved.records } };
+    })().finally(() => projectReads.delete(channel));
+    projectReads.set(channel, pending);
+    return pending;
+  }
+
+  function refreshOpenChannels() {
+    if (!cache || stopped || backgroundReads.size >= 2 || !openTargets.length) return;
+    let candidate = null, oldest = Infinity;
+    const threshold = now() - pollMs;
+    for (const open of openTargets) {
+      const channel = targetKey(open), last = channelReadAt.get(channel) ?? -Infinity;
+      if (channel !== key && !projectReads.has(channel) && last <= threshold && last < oldest) {
+        candidate = open;
+        oldest = last;
+      }
+    }
+    if (!candidate) return;
+    const pending = readProject(candidate, false)
+      .catch(() => {})
+      .finally(() => backgroundReads.delete(pending));
+    backgroundReads.add(pending);
   }
 
   async function loadCurrent(force) {
@@ -191,33 +247,33 @@ export function createTpsController(orca, {
     if (!force && now() - lastReadAt < pollMs) return state();
     const requestedGeneration = generation, requestedTarget = structuredClone(target);
     lastReadAt = now();
-    loading = force || !session;
+    loading = !session || (force && !cache);
     const task = { generation: requestedGeneration, promise: null };
     task.promise = (async () => {
       void publish();
       if (stopped || requestedGeneration !== generation) return state();
       try {
-        const result = await readSession(requestedTarget, { roots: structuredClone(roots), ...(force ? { fresh: true } : {}) });
+        const result = await readProject(requestedTarget, force);
         if (stopped || requestedGeneration !== generation) return state();
         const loaded = matchesTarget(result.session, requestedTarget) ? result.session : null;
         if (loaded) {
           session = loaded;
           warnings = (result.warnings ?? []).map(text => cleanText(text, 500))
             .filter(text => !HIDDEN_ROUTINE_WARNINGS.has(text)).slice(0, 20);
-          updatedAt = now();
+          updatedAt = result.cachedAt ?? now();
         } else {
           // Miss (file truncated, parse hiccup, capture lag): keep the previous records
           // instead of wiping the panel; surface the reason as a warning.
           const missWarning = cleanText((result.warnings ?? [])[0], 500);
           warnings = missWarning ? [missWarning] : warnings;
-          updatedAt = now();
+          if (!cache && !requestedTarget.executionHostId) updatedAt = now();
         }
       } catch {
         if (stopped || requestedGeneration !== generation) return state();
         // Read failure: retain the last good records so a transient I/O error
         // does not blank the panel; only the warning changes.
         warnings = ['当前对话的记录读取失败，保留上次统计，请稍后刷新。'];
-        updatedAt = now();
+        if (!cache && !requestedTarget.executionHostId) updatedAt = now();
       }
       loading = false;
       void publish();
@@ -230,7 +286,9 @@ export function createTpsController(orca, {
   async function checkActive({ force = false } = {}) {
     if (stopped) return state();
     await syncActive();
-    return loadCurrent(force);
+    const result = loadCurrent(force);
+    refreshOpenChannels();
+    return result;
   }
   const refresh = () => checkActive({ force: true });
 

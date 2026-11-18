@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { activeProfileUserData, readActiveConversation, selectActiveConversation } from '../src/active-conversation.mjs';
+import { activeProfileUserData, readActiveConversation, selectActiveConversation, selectOpenChannels } from '../src/active-conversation.mjs';
 
 let DatabaseSync;
 try { ({ DatabaseSync } = await import('node:sqlite')); }
@@ -136,6 +136,38 @@ test('remote, missing, or unsynced workspaces never return a target', () => {
     modify(s);
     assert.equal(selectActiveConversation(s, options()).target, null);
   }
+});
+
+test('remote channels keep POSIX paths on Windows and exclude sessions from another host', () => {
+  const s = state();
+  const host = s.activeWorkspaceExecutionHostId = 'runtime:one';
+  const [first, second] = s.tabsByWorktree[s.activeWorktreeId];
+  first.executionHostId = host;
+  second.executionHostId = 'runtime:two';
+  s.sleepingAgentSessionsByPaneKey['a:leaf'].executionHostId = host;
+  const remote = { ...options(), platform: 'win32', includeRemote: true };
+  const firstTarget = selectActiveConversation(s, remote).target;
+  assert.equal(firstTarget.worktreePath, '/workspace/orca-tps/1.5.0');
+  assert.equal(firstTarget.executionHostId, host);
+  assert.deepEqual(firstTarget.sessions.map(item => item.sessionId), ['session-a']);
+  s.activeWorkspaceExecutionHostId = second.executionHostId;
+  const otherTarget = selectActiveConversation(s, remote).target;
+  assert.notEqual(otherTarget.key, firstTarget.key);
+  assert.deepEqual(otherTarget.sessions.map(item => item.sessionId), ['session-b']);
+});
+
+test('open channels include an inactive remote workspace from its own host partition', () => {
+  const local = state();
+  const remote = state('repo::/home/remote/project');
+  const host = 'runtime:other';
+  for (const tab of remote.tabsByWorktree[remote.activeWorktreeId]) tab.executionHostId = host;
+  const open = selectOpenChannels(local, { [host]: remote }, { ...options(), includeRemote: true });
+  assert.equal(open.length, 2);
+  assert.equal(open[0].worktreeId, local.activeWorktreeId);
+  assert.equal(open[1].executionHostId, host);
+  assert.equal(open[1].worktreePath, '/home/remote/project');
+  assert.equal(open[1].sessions.length, 2);
+  assert.doesNotMatch(JSON.stringify(open), /DO_NOT_EXPOSE/);
 });
 
 test('conflicting pane metadata, remote panes, and relative paths are excluded from channel sessions', () => {

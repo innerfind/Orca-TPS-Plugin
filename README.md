@@ -17,12 +17,13 @@ Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-t
 
 ## Key Features
 
-- **Live Status Bar Tracking**: Automatically follows the active Orca workspace, tab, and split terminal pane (with 250ms low-overhead polling and full support for Orca 1.4.255+ split document-parts storage) to display the latest API request's output speed and cache hit rate (e.g., `🚀 ≈68 tokens/s · 🍪 命中 99.2%` or exact proxy mode `🚀 86 tokens/s`). Click to refresh immediately.
-- **Per-Request Sidebar Cards**: Open the sidebar panel to inspect the latest 100 API requests in the active conversation — including **model ID, completion timestamp, TTFT, output tokens, request duration, TPS, and cache hit rate**, with automatic badges for subagents (`子代理`) and local routing proxy (`代理`).
+- **Live Status Bar Tracking**: Shows output speed and cache hit rate for the latest API request in the active Orca project channel. Click to refresh immediately.
+- **Per-Request Sidebar Cards**: View the latest 100 requests across terminal sessions in the active channel, including model, completion time, TTFT, output tokens, request duration, TPS, and cache hit rate.
+- **Remote Project Channels**: Uses the existing Orca connection and a plugin-owned background terminal to collect statistics where the project runs. The remote host needs Node.js 22.13 or newer with SQLite support. The plugin asks for workspace and terminal access. Orca host API 1.7 or newer is required for remote collection.
 - **Tool Execution Time Excluded**: Measures individual API call durations instead of whole-turn wall-clock time, so local builds, test suites, shell commands, and approval dialogs never distort model generation speed.
 - **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, **Pi Agent**, and **Antigravity CLI**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
 - **Usage Totals & Heatmap**: A panel at the top shows today, the last 7 days and the last 30 days, plus a GitHub-style heatmap of the last year. Totals cover Claude Code, Codex, OpenCode, Pi and Antigravity CLI: total tokens (new input, output, cache writes and cache reads, matching CC Switch's real total), cache hit rate, request counts, and a per-agent and per-model breakdown. A **model average speed** ranking (mean tokens/s per model, from local session logs) sits in the same group. Counted locally in the background; only counts are stored, never message text.
-- **Strict Read-Only & Privacy-First**: Zero network requests, zero writes to agent transcripts or external databases, and zero prompt/response content exposure outside the local parser.
+- **Read-Only Session Data**: The parser reads agent transcripts and databases without modifying them. Remote projects send statistics back over the Orca connection, and conversation text stays with the parser.
 
 ---
 

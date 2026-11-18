@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, writeFile, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import {
   antigravityModelId,
   antigravityNativeTimings,
@@ -209,4 +210,29 @@ test('a conversation without a readable native store keeps tokens and warns inst
   assert.equal(scan.sessions[0].records.find(record => record.rawId === '7').durationMs, null);
   assert.equal(scan.sessions[0].records.find(record => record.rawId === '7').outputTokens, 280);
   assert.ok(scan.warnings.some(message => message.startsWith('antigravity：原生会话库无法读取')));
+});
+
+test('project TPS discovers unregistered Antigravity sessions by their saved workspace', sqliteTestOptions, async t => {
+  const root = await fixture(t), brain = path.join(root, 'brain');
+  const selected = path.join(root, 'project with spaces'), other = path.join(selected, 'other project');
+  await mkdir(path.join(root, 'conversations'));
+  for (const [sessionId, workspace] of [['selected', selected], ['other', other]]) {
+    const logs = path.join(brain, sessionId, '.system_generated', 'logs');
+    await mkdir(logs, { recursive: true });
+    await writeFile(path.join(logs, 'transcript.jsonl'), jsonl(transcriptRows()));
+    const db = new DatabaseSync(path.join(root, 'conversations', sessionId + '.db'));
+    try {
+      db.exec('CREATE TABLE trajectory_metadata_blob (id TEXT PRIMARY KEY, data BLOB);' +
+        'CREATE TABLE steps (idx INTEGER PRIMARY KEY, step_type INTEGER, metadata BLOB);' +
+        'CREATE TABLE gen_metadata (idx INTEGER PRIMARY KEY, data BLOB);');
+      const metadata = Buffer.concat([bytesField(1, stringField(1, pathToFileURL(workspace).href)), stringField(7, workspace)]);
+      db.prepare("INSERT INTO trajectory_metadata_blob VALUES ('main', ?)").run(metadata);
+    } finally { db.close(); }
+  }
+  const result = await readTargetSession({ worktreePath: selected, worktreeId: 'selected', sessions: [] },
+    { roots: { antigravity: [brain] }, includeDefaults: false });
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.session.records.length, parseJsonl(jsonl(transcriptRows()), 'antigravity', '', { sessionId: 'selected' }).records.length);
+  assert.ok(result.session.records.length > 0);
+  assert.ok(result.session.records.every(record => record.provider === 'antigravity'));
 });

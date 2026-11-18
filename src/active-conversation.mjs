@@ -50,20 +50,24 @@ function channelShortTitle(worktreePath) {
 
 /**
  * Pure channel selection: resolves the active project channel (worktree) and collects
- * all validated local terminal pane sessions in that channel plus its worktree path.
+ * validated terminal sessions on that channel's execution host plus its worktree path.
  */
 export function selectActiveConversation(state, options = {}) {
   const w = text(state?.activeWorktreeId);
   if (!w) return empty('当前没有打开对话。');
-  const host = state.activeWorkspaceExecutionHostId;
-  if (host != null && host !== 'local') return empty('当前是远程对话，暂不读取远程统计。');
+  const host = state.activeWorkspaceExecutionHostId ?? 'local';
+  const remote = typeof host === 'string' && /^(?:runtime|ssh):[^\s]+$/.test(host);
+  if (host !== 'local' && (!remote || !options.includeRemote)) return empty('当前是远程对话，暂不读取远程统计。');
   const workspaceKey = text(state.activeWorkspaceKey);
   if (workspaceKey && workspaceKey !== `worktree:${w}`) return empty('当前工作区状态尚未同步。');
 
   const pathApi = (options.platform || process.platform) === 'win32' ? path.win32 : path.posix;
   const sepIdx = w.indexOf('::');
   const rawWorktreePath = sepIdx >= 0 ? text(w.slice(sepIdx + 2)) : null;
-  let worktreePath = rawWorktreePath && pathApi.isAbsolute(rawWorktreePath) ? rawWorktreePath : null;
+  const absolute = value => value && (remote
+    ? path.posix.isAbsolute(value) || path.win32.isAbsolute(value)
+    : pathApi.isAbsolute(value));
+  let worktreePath = absolute(rawWorktreePath) ? rawWorktreePath : null;
 
   const unified = list(own(state.unifiedTabs, w));
   const tabs = list(own(state.tabsByWorktree, w));
@@ -73,7 +77,7 @@ export function selectActiveConversation(state, options = {}) {
 
   for (const tab of tabs) {
     if (!object(tab) || !text(tab.id) || tab.worktreeId !== w) continue;
-    if (tab.executionHostId != null && tab.executionHostId !== 'local') continue;
+    if (tab.executionHostId != null && tab.executionHostId !== host) continue;
     const tabId = tab.id;
     const layout = own(state.terminalLayoutsByTabId, tabId);
     const leaves = leafIds(layout?.root);
@@ -86,7 +90,11 @@ export function selectActiveConversation(state, options = {}) {
       if (!object(record) || record.paneKey !== paneKey || record.worktreeId !== w || (record.tabId != null && record.tabId !== tabId)) {
         continue;
       }
-      if (record.connectionId != null) continue;
+      const sameSshHost = record.connectionId != null && host === `ssh:${record.connectionId}`;
+      if (record.executionHostId != null && record.executionHostId !== host) continue;
+      const sameRemoteHost = sameSshHost || record.executionHostId === host ||
+        (record.connectionId == null && tab.executionHostId === host);
+      if (remote ? !sameRemoteHost : record.connectionId != null) continue;
       const provider = providerName(record.agent), sessionId = text(record.providerSession?.id);
       if (!provider || !sessionId || sessionId.length > 512) continue;
 
@@ -101,7 +109,7 @@ export function selectActiveConversation(state, options = {}) {
       const capturedAt = Number.isFinite(record.capturedAt) ? record.capturedAt : 0;
       if (Number.isFinite(tab.createdAt) && capturedAt && tab.createdAt > capturedAt) continue;
 
-      const stampKey = JSON.stringify([options.userDataPath || '', options.profileId || '', w, tabId, leafId]);
+      const stampKey = JSON.stringify([options.userDataPath || '', options.profileId || '', host, w, tabId, leafId]);
       const incarnation = text(own(state.terminalPtyIncarnationsByPaneKey, paneKey)) || text(own(layout?.ptyIdsByLeafId, leafId)) || null;
       const prior = history.get(stampKey);
       const signature = `${provider}:${sessionId}`;
@@ -116,7 +124,7 @@ export function selectActiveConversation(state, options = {}) {
       if (pendingCaptureBaseline !== null) continue;
 
       const transcriptPath = text(record.providerSession?.transcriptPath);
-      if (transcriptPath && !pathApi.isAbsolute(transcriptPath)) continue;
+      if (transcriptPath && !absolute(transcriptPath)) continue;
       const entry = { provider, sessionId };
       if (transcriptPath) {
         if (family(provider) === 'opencode' && /\.(?:db|sqlite|sqlite3)$/i.test(transcriptPath)) entry.dbPath = transcriptPath;
@@ -131,23 +139,50 @@ export function selectActiveConversation(state, options = {}) {
       }
 
       const paneCwd = text(record.providerSession?.cwd);
-      if (paneCwd && pathApi.isAbsolute(paneCwd)) paneCwds.add(paneCwd);
+      if (absolute(paneCwd)) paneCwds.add(paneCwd);
       fallbackTitle ??= text(tab.customTitle) || (leaves.length === 1 ? text(tab.aiVaultTitle?.title) : null) || text(record.terminalTitle);
     }
   }
 
   if (!worktreePath && paneCwds.size === 1) worktreePath = [...paneCwds][0];
-  if (!worktreePath && !sessions.length) return empty('当前频道暂无可统计的对话。');
+  if (!remote && !worktreePath && !sessions.length) return empty('当前频道暂无可统计的对话。');
 
   const target = {
-    key: JSON.stringify([options.userDataPath || '', options.profileId || '', w, worktreePath || '']),
+    key: JSON.stringify([options.userDataPath || '', options.profileId || '', w, worktreePath || '', ...(remote ? [host] : [])]),
     worktreeId: w,
+    ...(remote ? { executionHostId: host } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     sessions
   };
   const title = channelShortTitle(worktreePath) || fallbackTitle;
   if (title) target.title = title.slice(0, 200);
   return { target };
+}
+
+export function selectOpenChannels(state, byHost, options, active = selectActiveConversation(state, options).target) {
+  const channels = new Map();
+  if (active) channels.set(active.key, active);
+  const userTab = tab => (tab?.customTitle ?? tab?.title ?? tab?.label) !== 'TPS 远程统计';
+
+  for (const [host, workspace] of [['local', state], ...Object.entries(byHost ?? {})]) {
+    if (!object(workspace) || (host !== 'local' && !/^(?:runtime|ssh):[^\s]+$/.test(host))) continue;
+    const ids = new Set(list(workspace.activeWorktreeIdsOnShutdown).filter(text));
+    for (const groups of [workspace.tabsByWorktree, workspace.unifiedTabs]) {
+      for (const [id, tabs] of Object.entries(groups ?? {})) {
+        if (list(tabs).some(tab => userTab(tab) && (!tab?.executionHostId || tab.executionHostId === host))) ids.add(id);
+      }
+    }
+    for (const id of ids) {
+      // In the legacy document, the active foreign workspace is handled above.
+      if (host === 'local' && workspace === state && active?.executionHostId && id === active.worktreeId) continue;
+      const target = selectActiveConversation({
+        ...workspace, activeWorktreeId: id, activeWorkspaceKey: 'worktree:' + id,
+        activeWorkspaceExecutionHostId: host
+      }, options).target;
+      if (target && !channels.has(target.key)) channels.set(target.key, target);
+    }
+  }
+  return [...channels.values()];
 }
 
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
@@ -159,13 +194,13 @@ const hasColumn = (db, table, column) => db.prepare(`PRAGMA table_info(${table})
  * rewrite the legacy document occasionally. Like Orca's own reader, the parts are authoritative only
  * when their legacy_revision matches the legacy document's revision; otherwise return null.
  */
-function readWorkspaceParts(db) {
+function readWorkspaceParts(db, domain) {
   if (!hasTable(db, 'profile_state_document_parts') || !hasTable(db, 'profile_state_document_parts_meta')
     || !hasColumn(db, 'profile_state_documents', 'revision')) return null;
-  const meta = db.prepare("SELECT legacy_revision FROM profile_state_document_parts_meta WHERE domain='workspaceSession'").get();
-  const legacy = db.prepare("SELECT revision FROM profile_state_documents WHERE domain='workspaceSession'").get();
+  const meta = db.prepare('SELECT legacy_revision FROM profile_state_document_parts_meta WHERE domain=?').get(domain);
+  const legacy = db.prepare('SELECT revision FROM profile_state_documents WHERE domain=?').get(domain);
   if (!Number.isSafeInteger(meta?.legacy_revision) || meta.legacy_revision !== legacy?.revision) return null;
-  const rows = db.prepare("SELECT part_key, payload FROM profile_state_document_parts WHERE domain='workspaceSession' ORDER BY ordinal").all();
+  const rows = db.prepare('SELECT part_key, payload FROM profile_state_document_parts WHERE domain=? ORDER BY ordinal').all(domain);
   if (!rows.length) return null;
   let bytes = 0, state = {};
   for (const row of rows) {
@@ -188,55 +223,75 @@ function readWorkspaceParts(db) {
  * Cheap change marker for workspaceSession: Orca bumps these revisions on every save, so an
  * unchanged stamp means the selection cannot have changed. Null when the schema has no revisions.
  */
-function workspaceStamp(db) {
+function workspaceStamp(db, domains) {
   if (!hasColumn(db, 'profile_state_documents', 'revision')) return null;
-  const legacy = db.prepare("SELECT revision FROM profile_state_documents WHERE domain='workspaceSession'").get();
+  const legacy = db.prepare('SELECT revision FROM profile_state_documents WHERE domain=?');
   const parts = hasTable(db, 'profile_state_document_parts_meta')
-    ? db.prepare("SELECT revision, legacy_revision FROM profile_state_document_parts_meta WHERE domain='workspaceSession'").get()
+    ? db.prepare('SELECT revision, legacy_revision FROM profile_state_document_parts_meta WHERE domain=?')
     : null;
-  return JSON.stringify([legacy?.revision ?? null, parts?.revision ?? null, parts?.legacy_revision ?? null]);
+  return JSON.stringify(domains.map(domain => [legacy.get(domain), parts?.get(domain)]));
+}
+
+function workspaceDocument(db, domain) {
+  try {
+    const parts = readWorkspaceParts(db, domain);
+    if (parts) return parts;
+  } catch { /* The committed legacy document still provides a safe fallback. */ }
+  const row = db.prepare('SELECT payload FROM profile_state_documents WHERE domain=? AND length(payload)<=?').get(domain, MAX_STATE_BYTES);
+  return row ? JSON.parse(row.payload) : null;
 }
 
 let lastSelection = null;
-const copySelection = result => result.target
-  ? { ...result, target: { ...result.target, sessions: (result.target.sessions ?? []).map(item => ({ ...item })) } }
-  : { ...result };
+const copyTarget = target => target && { ...target, sessions: target.sessions.map(item => ({ ...item })) };
+const copySelection = result => ({
+  ...result,
+  target: copyTarget(result.target),
+  ...(result.openTargets ? { openTargets: result.openTargets.map(copyTarget) } : {})
+});
 
-/** Reads one committed SQLite snapshot per poll, including live WAL; never writes Orca state. */
-export async function readActiveConversation(options = {}) {
+export async function readOrcaProfile(options = {}) {
   const userDataPath = activeProfileUserData(options);
-  let profileId;
   for (const suffix of ['', '.bak']) {
     try {
       const index = await readSmallJson(path.join(userDataPath, `orca-profile-index.json${suffix}`));
       if (typeof index?.activeProfileId === 'string' && PROFILE_ID.test(index.activeProfileId) && list(index.profiles).some(profile => profile?.id === index.activeProfileId)) {
-        profileId = index.activeProfileId; break;
+        const profileId = index.activeProfileId;
+        return { userDataPath, profileId, stateFile: path.join(userDataPath, 'profiles', profileId, 'profile-state.db') };
       }
     } catch { /* The official resolver also accepts a valid backup index. */ }
   }
-  if (!profileId) return empty('无法识别 Orca 当前配置。');
+  return null;
+}
+
+/** Reads one committed SQLite snapshot per poll, including live WAL; never writes Orca state. */
+export async function readActiveConversation(options = {}) {
+  const profile = await readOrcaProfile(options);
+  if (!profile) return empty('无法识别 Orca 当前配置。');
+  const { userDataPath, profileId, stateFile } = profile;
   let DatabaseSync;
   try { ({ DatabaseSync } = await import('node:sqlite')); }
   catch { return empty('当前运行时不支持 SQLite，无法识别当前对话。'); }
   let db;
   try {
-    db = new DatabaseSync(path.join(userDataPath, 'profiles', profileId, 'profile-state.db'), { readOnly: true, enableExtensionLoading: false });
+    db = new DatabaseSync(stateFile, { readOnly: true, enableExtensionLoading: false });
     db.exec('PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=100;');
     // One read transaction so the stamp, the legacy document and its parts come from the same commit.
     db.exec('BEGIN');
-    const revision = workspaceStamp(db);
-    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform, revision]);
+    const domains = options.includeOpen ? ['workspaceSession', 'workspaceSessionsByHostId'] : ['workspaceSession'];
+    const revision = workspaceStamp(db, domains);
+    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform,
+      Boolean(options.includeRemote), Boolean(options.includeOpen), revision]);
     if (cacheKey && lastSelection?.key === cacheKey) return copySelection(lastSelection.result);
-    let state = null;
-    try { state = readWorkspaceParts(db); }
-    catch { state = null; }
-    if (!state) {
-      const row = db.prepare(`SELECT payload FROM profile_state_documents WHERE domain='workspaceSession' AND length(payload)<=${MAX_STATE_BYTES}`).get();
-      if (!row) return empty('Orca 尚未保存当前工作区状态。');
-      state = JSON.parse(row.payload);
-    }
+    const state = workspaceDocument(db, 'workspaceSession');
+    if (!state) return empty('Orca 尚未保存当前工作区状态。');
     if (!object(state)) return empty('Orca 当前工作区状态无效。');
-    const result = selectActiveConversation(state, { ...options, userDataPath, profileId });
+    const selectionOptions = { ...options, userDataPath, profileId };
+    const result = selectActiveConversation(state, selectionOptions);
+    if (options.includeOpen) {
+      let byHost;
+      try { byHost = workspaceDocument(db, 'workspaceSessionsByHostId'); } catch { /* Older profiles may omit host workspaces. */ }
+      result.openTargets = selectOpenChannels(state, byHost, selectionOptions, result.target);
+    }
     lastSelection = cacheKey ? { key: cacheKey, result: copySelection(result) } : null;
     return result;
   } catch { return empty('暂时无法读取 Orca 当前对话。'); }

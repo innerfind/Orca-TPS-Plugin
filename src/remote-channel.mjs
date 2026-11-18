@@ -1,0 +1,521 @@
+import { createHash, randomBytes } from 'node:crypto';
+import { execFile, spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import path from 'node:path';
+import { createInterface } from 'node:readline';
+import { promisify } from 'node:util';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import { readOrcaProfile } from './active-conversation.mjs';
+import { normalizeComparePath } from './data.mjs';
+import { COLLECTOR_FILES, MAX_RESPONSE_BASE64, USAGE_PAGE_SIZE, collectorCommand, remoteRecord } from './remote-collector.mjs';
+import { REMOTE_USAGE_PREFIX } from './usage-summary.mjs';
+
+const warnings = {
+  api: '当前 Orca 版本缺少远程项目接口，请更新 Orca。',
+  permission: '请在 Orca 的插件设置中授权读取工作区。',
+  workspace: '暂时无法确认远程项目频道，等待 Orca 工作区同步。',
+  ssh: '该远程项目没有可用的 SSH 连接。保留该频道上次的结果。',
+  node: '远程机器需要可用的 Node.js 22.13 或更新版本，并支持 SQLite。',
+  connection: '暂时无法连接远程统计，保留该频道上次的结果。',
+  read: '远程会话日志暂时无法读取，保留该频道上次的结果。'
+};
+
+class RemoteReadError extends Error {
+  constructor(reason) {
+    super(reason);
+    this.reason = reason;
+  }
+}
+
+const resultError = reason => ({ session: null, warnings: [warnings[reason] ?? warnings.connection] });
+const id = () => randomBytes(8).toString('hex');
+const samePath = (a, b) => normalizeComparePath(a, 'linux') === normalizeComparePath(b, 'linux');
+
+let bundle;
+function loadCollectorFiles() {
+  bundle ??= Promise.all(COLLECTOR_FILES.map(async file => [file, await readFile(new URL(file, import.meta.url), 'utf8')]))
+    .then(Object.fromEntries)
+    .catch(error => { bundle = undefined; throw error; });
+  return bundle;
+}
+
+async function readSshTargets(targetIds) {
+  const profile = await readOrcaProfile();
+  if (!profile) return [];
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(profile.stateFile, { readOnly: true, enableExtensionLoading: false });
+  try {
+    db.exec('PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=100;');
+    // Read only the saved destination. Authentication is handled by OpenSSH.
+    const query = db.prepare(
+      "SELECT json_extract(value, '$.configHost') AS alias, json_extract(value, '$.host') AS host, " +
+      "json_extract(value, '$.username') AS username, json_extract(value, '$.port') AS port, " +
+      "json_extract(value, '$.generation') AS generation " +
+      "FROM profile_state_documents, json_each(payload) WHERE domain = 'sshTargets' AND json_extract(value, '$.id') = ?"
+    );
+    return targetIds.map(id => query.get(id)).filter(Boolean);
+  } finally {
+    db.close();
+  }
+}
+
+function createOrcaRpc() {
+  const exec = promisify(execFile);
+  const cliEnv = { ...process.env };
+  delete cliEnv.ORCA_ENVIRONMENT;
+  delete cliEnv.ORCA_PAIRING_CODE;
+  const windows = process.platform === 'win32';
+  if (windows) {
+    // Orca's worker may omit these even though its CLI needs the profile directories.
+    cliEnv.APPDATA ||= path.join(homedir(), 'AppData', 'Roaming');
+    cliEnv.LOCALAPPDATA ||= path.join(homedir(), 'AppData', 'Local');
+  }
+  const cliName = windows ? 'orca.exe' : 'orca';
+  const paths = [
+    path.join(path.dirname(process.execPath), 'resources', 'bin', cliName),
+    ...(windows
+      ? [path.join(cliEnv.LOCALAPPDATA, 'Programs', 'orca', 'resources', 'bin', cliName)]
+      : []),
+    ...(process.platform === 'darwin' ? [
+      path.resolve(path.dirname(process.execPath), '..', 'Resources', 'bin', cliName),
+      '/Applications/Orca.app/Contents/Resources/bin/orca'
+    ] : []),
+    ...(process.platform === 'linux' ? [
+      'orca-ide',
+      path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'orca', 'linux-orca-cli-shim', 'orca')
+    ] : []),
+    cliName
+  ];
+  let executable;
+
+  async function rpc(args, environment, signal) {
+    for (const file of executable ? [executable] : paths) {
+      let stdout, failure;
+      try {
+        const routedArgs = environment ? [...args.slice(0, 2), '--environment', environment, ...args.slice(2)] : args;
+        ({ stdout } = await exec(file, [...routedArgs, '--json'], {
+          signal, env: cliEnv, timeout: 12_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true
+        }));
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          if (file === executable) executable = undefined;
+          continue;
+        }
+        stdout = error.stdout;
+        failure = error;
+      }
+      signal?.throwIfAborted();
+      if (!stdout) throw failure ?? new RemoteReadError('connection');
+      const response = JSON.parse(stdout);
+      if (response.ok === false) {
+        const error = new RemoteReadError('connection');
+        error.code = response.error?.code;
+        error.operation = args.slice(0, 2).join('.');
+        throw error;
+      }
+      if (failure) throw failure;
+      executable = file;
+      return response.result ?? response;
+    }
+    throw new RemoteReadError('api');
+  }
+
+  return rpc;
+}
+
+function createRuntimeLookup(orca) {
+  const rpc = createOrcaRpc();
+  return async (target, signal) => {
+    const host = target.executionHostId;
+    const { environments } = await rpc(['environment', 'list'], null, signal);
+    const matches = (environments ?? []).filter(item => host.startsWith('runtime:')
+      ? item.id === host.slice('runtime:'.length)
+      : host === 'ssh:' + item.orcadDeployment?.sshTargetId);
+    if (matches.length > 1) throw new RemoteReadError('workspace');
+    const [environment] = matches;
+    const targetId = host.startsWith('ssh:') ? host.slice('ssh:'.length) : environment?.orcadDeployment?.sshTargetId;
+    if (!targetId) throw new RemoteReadError('ssh');
+
+    let workspace;
+    if (environment) {
+      const selectors = ['id:' + target.worktreeId];
+      if (target.worktreePath) selectors.push('path:' + target.worktreePath);
+      for (const selector of selectors) {
+        let result;
+        try {
+          result = await rpc(['worktree', 'show', '--worktree', selector], environment.id, signal);
+        } catch (error) {
+          if (error.code === 'selector_not_found') continue;
+          throw error;
+        }
+        const row = result.worktree;
+        if (row?.id && row.path && row.isArchived !== true &&
+          (!target.worktreePath || samePath(row.path, target.worktreePath))) {
+          workspace = row;
+          break;
+        }
+      }
+    } else {
+      const listing = await orca.host.call('workspace.list', undefined, { signal });
+      workspace = listing.workspaces?.find(row => row.hostId === host && row.id === target.worktreeId &&
+        (!target.worktreePath || samePath(row.path, target.worktreePath)));
+    }
+    if (!workspace?.path || !path.posix.isAbsolute(workspace.path) || /[\x00-\x1f\x7f]/.test(workspace.path)) {
+      throw new RemoteReadError('workspace');
+    }
+
+    const [ssh] = await readSshTargets([targetId]);
+    const generation = environment?.orcadDeployment?.sshTargetGeneration;
+    if (!ssh || (generation != null && ssh.generation !== generation)) throw new RemoteReadError('ssh');
+    return { ...ssh, directory: workspace.path };
+  };
+}
+
+const shellQuote = value => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+
+function launchSsh(destination, token) {
+  const { host, port, username, alias, directory } = destination;
+  if (typeof host !== 'string' || !/^[a-z\d:][a-z\d.:-]*$/i.test(host) ||
+    typeof username !== 'string' || !/^[a-z\d_][a-z\d_.-]*$/i.test(username) ||
+    !Number.isInteger(port) || port < 1 || port > 65535) throw new RemoteReadError('ssh');
+  const configHost = typeof alias === 'string' && /^[\p{L}\p{N}_][\p{L}\p{N}_.-]*$/u.test(alias) ? alias : host;
+  const prefix = '@TPS:' + token + ':';
+  const checkNode = "const [major,minor]=process.versions.node.split('.').map(Number);" +
+    "if(major<22||(major===22&&minor<13))process.exit(1);require('node:sqlite')";
+  // Non-interactive SSH may skip the shell profile that normally adds Node to PATH.
+  const script = [
+    'cd ' + (directory ? shellQuote(directory) : '"$HOME"') + ' || { echo ' + prefix + 'workspace; exit 1; }',
+    'for node in node "$HOME"/.orca-remote/runtimes/node-*/bin/node "$HOME"/.local/share/nodejs/node-*/bin/node "$HOME"/.nvm/versions/node/*/bin/node; do',
+    '  if "$node" --input-type=commonjs -e ' + shellQuote(checkNode) + ' >/dev/null 2>&1; then',
+    '    exec "$node" ' + collectorCommand(token).slice('node '.length),
+    '  fi',
+    'done',
+    'echo ' + prefix + 'node'
+  ].join('\n');
+  const options = ['BatchMode=yes', 'StrictHostKeyChecking=yes', 'UpdateHostKeys=no',
+    'ClearAllForwardings=yes', 'ForwardAgent=no', 'ForwardX11=no', 'PermitLocalCommand=no',
+    'ControlMaster=no', 'ControlPath=none', 'RemoteCommand=none', 'ConnectTimeout=5', 'ServerAliveInterval=15'];
+  let binary = 'ssh', env;
+  if (process.platform === 'win32') {
+    const SystemRoot = process.env.SystemRoot || 'C:\\Windows';
+    binary = path.join(SystemRoot, 'System32', 'OpenSSH', 'ssh.exe');
+    // The plugin worker can omit Windows variables OpenSSH needs even with an absolute executable path.
+    env = { ...process.env, SystemRoot, USERPROFILE: homedir(),
+      ProgramData: process.env.ProgramData || path.join(path.parse(SystemRoot).root, 'ProgramData') };
+  }
+  return spawn(binary, ['-T', ...options.flatMap(option => ['-o', option]),
+    '-o', 'HostName=' + host, '-p', String(port), '-l', username, configHost, 'sh -c ' + shellQuote(script)
+  ], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+}
+
+function connectCollector(child, token, watchId) {
+  const prefix = '@TPS:' + token + ':';
+  let ready = false, failure, waiter, latest;
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const closed = new Promise(resolve => {
+    child.once('close', () => {
+      fail(new RemoteReadError('connection'));
+      lines.close();
+      resolve();
+    });
+  });
+
+  function fail(error) {
+    failure ??= error;
+    waiter?.finish(failure);
+  }
+
+  child.on('error', fail);
+  child.stdin.on('error', fail);
+  child.stdout.on('error', fail);
+  lines.on('line', line => {
+    if (failure || !line.startsWith(prefix)) return;
+    const frame = line.slice(prefix.length);
+    if (frame === 'ready') {
+      ready = true;
+      if (waiter?.requestId === 'ready') waiter.finish(null);
+      return;
+    }
+    if (frame === 'node' || frame === 'workspace') {
+      fail(new RemoteReadError(frame));
+      return;
+    }
+    if (frame.length > MAX_RESPONSE_BASE64 + 17) return;
+    const match = /^([a-f\d]{16}):([A-Za-z0-9+/=]+)$/.exec(frame);
+    if (!match) return;
+    const [, requestId, body] = match;
+    const response = waiter?.requestId === requestId ? waiter : null;
+    const version = watchId && requestId.startsWith(watchId) ? parseInt(requestId.slice(8), 16) : 0;
+    if (!response && version <= (latest?.version ?? 0)) return;
+    try {
+      const value = JSON.parse(gunzipSync(Buffer.from(body, 'base64'), { maxOutputLength: 8 * 1024 * 1024 }));
+      if (response) response.finish(null, value);
+      else latest = { version, answer: value };
+    } catch {
+      fail(new RemoteReadError('read'));
+    }
+  });
+
+  function waitFor(requestId, signal) {
+    signal.throwIfAborted();
+    if (failure) throw failure;
+    if (requestId === 'ready' && ready) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const abort = () => finish(signal.reason);
+      function finish(error, result) {
+        signal.removeEventListener('abort', abort);
+        waiter = undefined;
+        if (error) reject(error);
+        else resolve(result);
+      }
+      waiter = { requestId, finish };
+      signal.addEventListener('abort', abort, { once: true });
+    });
+  }
+
+  return {
+    ready: signal => waitFor('ready', signal),
+    exchange(request, signal) {
+      const body = gzipSync(JSON.stringify(request)).toString('base64');
+      if (body.length > 96_000) throw new RemoteReadError('read');
+      const requestId = id();
+      const response = waitFor(requestId, signal);
+      child.stdin.write('>' + requestId + ':' + body + '\n');
+      return response;
+    },
+    latest() {
+      if (failure) throw failure;
+      return latest;
+    },
+    close() {
+      fail(new RemoteReadError('connection'));
+      child.stdin.end();
+      child.kill();
+      return closed;
+    }
+  };
+}
+
+export function createRemoteChannelReader(orca, {
+  timeoutMs = 20_000, startupTimeoutMs = 30_000, now = Date.now,
+  resolveRuntime = createRuntimeLookup(orca), launch = launchSsh
+} = {}) {
+  let wanted = new Set();
+  const collectors = new Map(), retries = new Map();
+  const pendingClosures = new Set();
+
+  function retire(entry) {
+    if (collectors.get(entry.key) === entry) collectors.delete(entry.key);
+    entry.abort.abort();
+    if (!entry.connection) return;
+    const done = entry.connection.close().finally(() => pendingClosures.delete(done));
+    pendingClosures.add(done);
+  }
+
+  function setTarget(target) {
+    setTargets(target ? [target] : []);
+  }
+
+  function setTargets(targets) {
+    wanted = new Set(targets.filter(target => target?.executionHostId).map(target => target.key));
+    for (const [key, entry] of collectors) if (!wanted.has(key)) retire(entry);
+    for (const key of retries.keys()) if (!wanted.has(key)) retries.delete(key);
+  }
+
+  async function start(entry, target, signal) {
+    entry.stage = 'route';
+    if (!orca.grantedCapabilities?.includes('workspace:read')) throw new RemoteReadError('permission');
+    const route = await resolveRuntime(target, signal);
+    if (!route?.directory) throw new RemoteReadError('workspace');
+    signal.throwIfAborted();
+    entry.stage = 'ssh';
+    entry.path = route.directory;
+    entry.connection = connectCollector(launch(route, entry.token), entry.token, entry.watchId);
+    await entry.connection.ready(signal);
+
+    return loadCollectorFiles();
+  }
+
+  async function read(target, { fresh = false } = {}) {
+    if (!wanted.has(target.key)) return resultError('workspace');
+    const retry = retries.get(target.key);
+    if (!fresh && retry && now() < retry.at) return resultError(retry.reason);
+    let entry = collectors.get(target.key);
+    if (!entry) {
+      entry = { key: target.key, token: id(), watchId: id().slice(0, 8), version: 0, abort: new AbortController() };
+      collectors.set(target.key, entry);
+    }
+    const signal = AbortSignal.any([entry.abort.signal, AbortSignal.timeout(entry.connection ? timeoutMs : startupTimeoutMs)]);
+    try {
+      const files = !entry.connection ? await start(entry, target, signal) : undefined;
+      entry.stage = 'read';
+      const signature = JSON.stringify(target.sessions ?? []);
+      if (files || fresh || signature !== entry.signature || now() - entry.lastHandshake >= 30_000) {
+        const response = await entry.connection.exchange({
+          ...(files ? { files } : {}),
+          watchId: entry.watchId,
+          project: { worktreePath: entry.path, sessions: target.sessions, fresh }
+        }, signal);
+        if (!response.answer) throw new RemoteReadError('read');
+        entry.signature = signature;
+        entry.version = response.version;
+        entry.lastHandshake = now();
+        entry.lastReply = response.answer;
+      } else {
+        const latest = entry.connection.latest();
+        if (latest && latest.version > entry.version) {
+          entry.version = latest.version;
+          entry.lastReply = latest.answer;
+        }
+      }
+      const answer = entry.lastReply;
+      if (answer.error) throw new RemoteReadError(answer.error);
+      if (!Array.isArray(answer.records)) return resultError('read');
+      retries.delete(target.key);
+      return {
+        session: {
+          id: 'channel:' + target.worktreeId,
+          provider: 'channel',
+          records: answer.records.slice(0, 100).map(remoteRecord).filter(Boolean).sort((a, b) => b.completedAt - a.completedAt)
+        },
+        warnings: answer.incomplete ? ['远程项目的部分会话日志暂时无法读取。'] : []
+      };
+    } catch (error) {
+      if (collectors.get(target.key) === entry) {
+        const denied = ['capability_denied', 'consent_required', 'not_permitted'].includes(error.code);
+        const lastFailure = denied ? 'permission' : Object.hasOwn(warnings, error.reason) ? error.reason : 'connection';
+        const code = typeof error.code === 'string' && /^[a-z0-9_]+$/i.test(error.code) ? error.code : lastFailure;
+        const action = error.operation ? entry.stage + '/' + error.operation : entry.stage;
+        orca.log?.('远程统计读取失败（' + action + ': ' + code + '）。');
+        retries.set(target.key, { at: now() + 10_000, reason: lastFailure });
+        retire(entry);
+        return resultError(lastFailure);
+      }
+      return resultError('connection');
+    }
+  }
+
+  async function dispose() {
+    setTarget(null);
+    await Promise.allSettled(pendingClosures);
+  }
+
+  return { setTarget, setTargets, read, dispose };
+}
+
+function resolveUsageHosts() {
+  const rpc = createOrcaRpc();
+  return async signal => {
+    const { hosts } = await rpc(['host', 'list'], null, signal);
+    return readSshTargets((hosts ?? []).filter(row => row.kind === 'ssh' && row.connected === true).map(row => row.id));
+  };
+}
+
+const usageKey = /^[a-f\d]{24}$/;
+const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+function validUsageDays(days) {
+  return isObject(days) && Object.entries(days).every(([day, agents]) =>
+    /^\d{4}-\d{2}-\d{2}$/.test(day) && isObject(agents) && Object.entries(agents).every(([provider, models]) =>
+      /^(codex|claude|opencode2?|pi|antigravity)$/.test(provider) && isObject(models) && Object.entries(models).every(([model, counters]) =>
+        model.length <= 128 && Array.isArray(counters) && counters.length === 8 &&
+        counters.every(value => Number.isFinite(value) && value >= 0))));
+}
+
+export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts(), launch = launchSsh } = {}) {
+  const lifetime = new AbortController();
+  const connections = new Set();
+  const signal = timeout => AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeout)]);
+
+  async function scanHost(route, scope, cutoffMs, timeZone) {
+    const token = id(), startupSignal = signal(45_000);
+    const files = await loadCollectorFiles();
+    startupSignal.throwIfAborted();
+    const connection = connectCollector(launch(route, token), token);
+    connections.add(connection);
+    try {
+      await connection.ready(startupSignal);
+      const items = new Map();
+      let offset = 0;
+      for (;;) {
+        const page = await connection.exchange({
+          ...(offset === 0 ? { files } : {}),
+          usage: { type: 'list', cutoffMs, offset, timeZone }
+        }, signal(45_000));
+        if (!Array.isArray(page.items) || page.items.length > USAGE_PAGE_SIZE || typeof page.more !== 'boolean' ||
+          (page.more && page.items.length !== USAGE_PAGE_SIZE)) {
+          throw new RemoteReadError('read');
+        }
+        for (const item of page.items) {
+          if (typeof item.key !== 'string' || !usageKey.test(item.key) || typeof item.stamp !== 'string' || !usageKey.test(item.stamp) ||
+            !Number.isFinite(item.bytes) || item.bytes < 0 || !Number.isFinite(item.mtimeMs) || item.mtimeMs < 0) {
+            throw new RemoteReadError('read');
+          }
+          const key = scope + item.key;
+          items.set(key, { ...item, key, stamp: timeZone + ':' + item.stamp, readMany });
+        }
+        if (!page.more) break;
+        offset += page.items.length;
+      }
+      return [...items.values()];
+    } catch (error) {
+      await close(connection);
+      throw error;
+    }
+
+    async function readMany(keys) {
+      const localKeys = keys.map(key => key.slice(scope.length));
+      const reply = await connection.exchange({ usage: { type: 'read', keys: localKeys } }, signal(90_000));
+      if (reply.error === 'limit' && keys.length > 1) {
+        const half = Math.ceil(keys.length / 2);
+        const left = await readMany(keys.slice(0, half));
+        const right = await readMany(keys.slice(half));
+        return new Map([...left, ...right]);
+      }
+      if (!isObject(reply.results)) throw new RemoteReadError('read');
+      return new Map(localKeys.filter(key => validUsageDays(reply.results[key])).map(key => [scope + key, reply.results[key]]));
+    }
+  }
+
+  async function discover(cutoffMs) {
+    const discovery = { descriptors: [], coveredRemoteScopes: new Set() };
+    if (!orca.grantedCapabilities?.includes('workspace:read') || lifetime.signal.aborted) return discovery;
+    let routes;
+    try { routes = await resolveHosts(signal(15_000)); }
+    catch {
+      if (!lifetime.signal.aborted) orca.log?.('暂时无法枚举远端用量来源，保留上次统计。');
+      return discovery;
+    }
+    const scopes = new Map();
+    for (const route of routes) {
+      const endpoint = JSON.stringify([route.host?.toLowerCase(), route.port, route.username]);
+      const scope = REMOTE_USAGE_PREFIX + createHash('sha256').update(endpoint).digest('hex').slice(0, 24) + ':';
+      if (!scopes.has(scope)) scopes.set(scope, route);
+    }
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const entries = [...scopes];
+    for (let i = 0; i < entries.length && !lifetime.signal.aborted; i += 4) {
+      const group = entries.slice(i, i + 4);
+      const scanned = await Promise.allSettled(group.map(([scope, route]) => scanHost(route, scope, cutoffMs, timeZone)));
+      for (const [index, result] of scanned.entries()) {
+        if (result.status !== 'fulfilled') {
+          if (!lifetime.signal.aborted) orca.log?.('部分远端用量暂不可读，保留上次统计。');
+          continue;
+        }
+        discovery.coveredRemoteScopes.add(group[index][0]);
+        for (const item of result.value) discovery.descriptors.push(item);
+      }
+    }
+    return discovery;
+  }
+
+  function close(connection) {
+    return connections.delete(connection) ? connection.close() : Promise.resolve();
+  }
+  const finish = () => Promise.all([...connections].map(close));
+  async function dispose() {
+    lifetime.abort();
+    await finish();
+  }
+  return { discover, finish, dispose };
+}

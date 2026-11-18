@@ -207,6 +207,61 @@ function codexRows(session = 'same-session', turn = 'one') {
   ];
 }
 
+test('append cursors retain an unfinished request across a full live-tail window and rebuild on truncation', async t => {
+  const root = await fixture(t);
+  const file = path.join(root, 'test-append.jsonl');
+  const [header, start, finish] = codexRows('append');
+  await writeFile(file, jsonl([header, start]) + '\n');
+  const target = { provider: 'codex', sessionId: 'append', transcriptPath: file };
+  const read = () => readTargetSession(target, { includeDefaults: false });
+  assert.equal((await read()).session.records.length, 0);
+  const padding = JSON.stringify({ type: 'ignored', padding: 'x'.repeat(9 * 1024 * 1024) }) + '\n';
+  await appendFile(file, padding);
+  assert.equal((await read()).session.records.length, 0);
+  await appendFile(file, padding + JSON.stringify(finish));
+  assert.equal((await read()).session.records.length, 0);
+  await appendFile(file, '\n');
+  const completed = (await read()).session.records;
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].tokensPerSecond, 100);
+  assert.deepEqual((await read()).session.records, completed);
+
+  const replacement = codexRows('append');
+  replacement[2].payload.info.last_token_usage.output_tokens = 400;
+  replacement[2].payload.info.total_token_usage.output_tokens = 400;
+  await writeFile(file, jsonl(replacement) + '\n');
+  const replaced = (await read()).session.records;
+  assert.equal(replaced.length, 1);
+  assert.equal(replaced[0].outputTokens, 400);
+});
+
+test('incremental SQLite reads include edits to old rows and remove deleted rows', sqliteTestOptions, async t => {
+  const root = await fixture(t);
+  const dbPath = path.join(root, 'opencode.db');
+  const db = new DatabaseSync(dbPath);
+  const clock = Date.parse('2026-01-01T00:00:00Z');
+  const message = (index, output) => JSON.stringify({ tokens: { output },
+    time: { created: clock + index * 3000, completed: clock + index * 3000 + 2000 } });
+  try {
+    db.exec('PRAGMA journal_mode=WAL; CREATE TABLE session_v2 (id TEXT PRIMARY KEY, time_updated INTEGER);' +
+      'CREATE TABLE session_message (id TEXT PRIMARY KEY, session_id TEXT, type TEXT, seq INTEGER, time_created INTEGER, time_updated INTEGER, data TEXT);' +
+      "INSERT INTO session_v2 VALUES ('delta', 1234);");
+    const insert = db.prepare("INSERT INTO session_message VALUES (?, 'delta', 'assistant', ?, ?, ?, ?)");
+    for (let i = 0; i < 16; i++) insert.run(String(i), i, clock + i, clock + i, message(i, 200 + i));
+    const target = { provider: 'opencode2', sessionId: 'delta', dbPath };
+    const read = () => readTargetSession(target, { includeDefaults: false });
+    assert.equal((await read()).session.records.length, 16);
+    db.prepare("UPDATE session_message SET data=?, time_updated=? WHERE id='1'").run(message(1, 543), clock + 1000);
+    db.exec("DELETE FROM session_message WHERE id='2'");
+    insert.run('16', 16, clock + 16, clock + 16, message(16, 310));
+    const { records } = (await read()).session;
+    assert.equal(records.length, 16);
+    assert.equal(records[0].outputTokens, 310);
+    assert.ok(records.some(record => record.outputTokens === 543));
+    assert.ok(records.every(record => record.outputTokens !== 202));
+  } finally { db.close(); }
+});
+
 test('portable defaults respect Windows roaming, Linux XDG homes and CC Switch database path', () => {
   const linux = defaultRoots({ home: '/home/person', platform: 'linux', env: { XDG_CONFIG_HOME: '/config', XDG_DATA_HOME: '/data' } });
   assert.ok(linux.roots.codex.includes('/config/orca/codex-runtime-home/home/sessions'));

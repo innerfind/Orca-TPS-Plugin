@@ -1,27 +1,35 @@
 import { open, readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { createReadStream, watch } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { configuredRoots, defaultRoots } from './data-paths.mjs';
 import {
   SESSION_PROXY_DEDUP_WINDOW_SECONDS,
   antigravityNativeTimings,
   createCodexParser,
+  createJsonlCursor,
   antigravitySessionIdFromPath,
   antigravityStepStart,
+  antigravityWorkspacePaths,
   mergeChannelProxyRecords,
   mergeProxyRecords,
   parseJsonl,
   parseOpenCodeRows,
+  readJsonlMetadata,
   recentRecords
 } from './parsers.mjs';
 import { HISTORY_DAYS, accumulateRecords, dayKeyAgo } from './usage-summary.mjs';
 
 const MAX_FILES = 1500, MAX_DIRECTORIES = 500, MAX_DEPTH = 8, MAX_SUBAGENT_FILES = 200;
 const MAX_FILE_BYTES = 16 * 1024 * 1024, MAX_SCAN_BYTES = 64 * 1024 * 1024, MAX_HEADER_BYTES = 262_144;
+const CURSOR_ANCHOR_BYTES = 256;
 const parseCache = new Map(), headerCache = new Map(), discoveryCache = new Map(), databaseCache = new Map(), locationCache = new Map(), ccSwitchCache = new Map();
+const pendingJsonl = new Map();
+const databaseRows = new Map();
+const antigravityWorkspaces = new Map();
 const skippedDirectories = new Set(['node_modules', '.git', 'subagents', 'cache', 'plugins', 'skills', 'auth', 'credentials']);
 const shortError = error => typeof error?.code === 'string' ? error.code : '读取失败';
 const identity = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
@@ -147,7 +155,40 @@ async function antigravityNativeStamp(transcriptPath) {
   const database = dbPath ? await info(dbPath) : null;
   if (!database?.isFile()) return 'native:none';
   const wal = await info(`${dbPath}-wal`);
-  return `native:${database.size}:${database.mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
+  return 'native:' + fileStamp(database) + ':' + (wal ? fileStamp(wal) : '');
+}
+
+async function antigravityWorkspace(transcriptPath, platform) {
+  const dbPath = antigravityNativeDbPath(transcriptPath);
+  if (!dbPath) return null;
+  const stamp = await antigravityNativeStamp(transcriptPath);
+  if (stamp === 'native:none') return null;
+  const key = dbPath + ':' + platform, cached = antigravityWorkspaces.get(key);
+  if (cached?.stamp === stamp) return cached.workspace;
+  let db;
+  try {
+    const { DatabaseSync } = await import('node:sqlite');
+    db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=100; PRAGMA trusted_schema=OFF;');
+    const row = tables(db).has('trajectory_metadata_blob')
+      ? db.prepare("SELECT data FROM trajectory_metadata_blob WHERE id = 'main' AND length(data) <= 262144").get()
+      : null;
+    const win = platform === 'win32', pathApi = win ? path.win32 : path.posix;
+    const candidates = antigravityWorkspacePaths(row?.data);
+    let workspace = null;
+    for (const candidate of candidates) {
+      let directory;
+      try { directory = candidate.startsWith('file:') ? fileURLToPath(candidate, { windows: win }) : candidate; }
+      catch { continue; }
+      if (pathApi.isAbsolute(directory)) {
+        workspace = normalizeComparePath(directory, platform);
+        if (workspace) break;
+      }
+    }
+    antigravityWorkspaces.set(key, { stamp, workspace });
+    trimCache(antigravityWorkspaces, 2000);
+    return workspace;
+  } finally { db?.close(); }
 }
 
 /** Read-only: model-response step metadata and generation metadata only; step payloads are never opened. */
@@ -178,10 +219,58 @@ async function readAntigravityTimings(transcriptPath, note) {
   } finally { db?.close(); }
 }
 
-async function readJsonl(candidate, budget, warnings, expectedSessionId, { isSubagent = false } = {}) {
+const fileIdentity = meta => [meta.dev, meta.ino, meta.birthtimeMs].join(':');
+const fileStamp = meta => [fileIdentity(meta), meta.size, meta.mtimeMs, meta.ctimeMs].join(':');
+
+async function readAt(file, start, length) {
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await file.read(buffer, 0, length, start);
+  return buffer.subarray(0, bytesRead);
+}
+
+async function anchorAt(file, start, length) {
+  const bytes = await readAt(file, start, length);
+  return bytes.length === length ? createHash('sha256').update(bytes).digest('hex') : null;
+}
+
+async function writeAnchors(file, offset) {
+  const length = Math.min(CURSOR_ANCHOR_BYTES, offset);
+  if (!length) return [];
+  const positions = [...new Set([0, offset - length])];
+  return Promise.all(positions.map(async start => ({ start, length, hash: await anchorAt(file, start, length) })));
+}
+
+async function matchAnchors(file, anchors, budget) {
+  if (!anchors?.length) return false;
+  for (const { start, length, hash } of anchors) {
+    if (!hash || budget.remaining < length) return false;
+    budget.remaining -= length;
+    if (await anchorAt(file, start, length) !== hash) return false;
+  }
+  return true;
+}
+
+function readJsonl(candidate, budget, warnings, expectedSessionId, { isSubagent = false } = {}) {
   const key = `${candidate.provider}:${candidate.path}:${isSubagent ? 'sub' : 'main'}`;
-  const stamp = `${candidate.info.size}:${candidate.info.mtimeMs}` +
-    (candidate.provider === 'antigravity' ? `:${await antigravityNativeStamp(candidate.path)}` : '');
+  // Different projects can discover the same log. Only one read may advance its parser.
+  const pending = pendingJsonl.get(key);
+  const result = (async () => {
+    if (pending) {
+      await pending.catch(() => {});
+      const current = await info(candidate.path);
+      if (!current?.isFile()) return null;
+      candidate = { ...candidate, info: current };
+    }
+    return advanceJsonl(key, candidate, budget, warnings, expectedSessionId, isSubagent);
+  })();
+  pendingJsonl.set(key, result);
+  return result.finally(() => { if (pendingJsonl.get(key) === result) pendingJsonl.delete(key); });
+}
+
+async function advanceJsonl(key, candidate, budget, warnings, expectedSessionId, isSubagent) {
+  const sourceStamp = fileStamp(candidate.info);
+  const nativeStamp = candidate.provider === 'antigravity' ? await antigravityNativeStamp(candidate.path) : '';
+  const stamp = sourceStamp + ':' + nativeStamp;
   const cached = parseCache.get(key);
   const matches = result => {
     if (expectedSessionId === undefined) return true;
@@ -189,44 +278,73 @@ async function readJsonl(candidate, budget, warnings, expectedSessionId, { isSub
     return result?.sourceSessionId === expectedSessionId;
   };
   if (cached?.stamp === stamp) { replayWarnings(warnings, cached); return matches(cached) ? cached.session : null; }
-  const bytes = Math.min(candidate.info.size, MAX_FILE_BYTES);
-  if (bytes > budget.remaining) {
+  const retained = () => {
     warnings.add('本次读取达到 64 MiB 上限，较旧会话稍后读取；已有缓存仍可使用。');
     replayWarnings(warnings, cached);
     return matches(cached) ? cached?.session ?? null : null;
-  }
-  budget.remaining -= bytes;
-  const file = await open(candidate.path, 'r');
+  };
+  let file;
   try {
     const sourceWarnings = [];
-    const offset = candidate.info.size - bytes, buffer = Buffer.alloc(bytes);
-    const read = await file.read(buffer, 0, bytes, offset);
-    let text = buffer.subarray(0, read.bytesRead).toString('utf8'), header = '';
-    if (offset > 0) {
-      const firstLine = text.indexOf('\n');
-      text = firstLine < 0 ? '' : text.slice(firstLine + 1);
-      const start = Buffer.alloc(Math.min(MAX_HEADER_BYTES, candidate.info.size));
-      const head = await file.read(start, 0, start.length, 0);
-      header = start.subarray(0, head.bytesRead).toString('utf8');
+    let cursor = cached?.cursor, nextOffset = cached?.nextOffset ?? 0, anchors = cached?.anchors;
+    let startOffset = cached?.startOffset ?? 0;
+    if (cached?.sourceStamp !== sourceStamp) {
+      file = await open(candidate.path, 'r');
+      const opened = await file.stat();
+      if (fileIdentity(opened) !== fileIdentity(candidate.info) || opened.size < candidate.info.size) {
+        throw Object.assign(new Error('Log changed while opening'), { code: 'EAGAIN' });
+      }
+      const size = candidate.info.size;
+      const append = cursor && nextOffset > startOffset && (cursor.sessionId || isSubagent) &&
+        cached.identity === fileIdentity(candidate.info) &&
+        size > cached.size && size - nextOffset <= MAX_FILE_BYTES && size - startOffset <= MAX_SCAN_BYTES &&
+        await matchAnchors(file, anchors, budget);
+      const offset = append ? nextOffset : Math.max(0, size - MAX_FILE_BYTES);
+      const bytes = size - offset;
+      if (bytes > budget.remaining) return retained();
+      budget.remaining -= bytes;
+      const buffer = await readAt(file, offset, bytes);
+      if (buffer.length !== bytes) throw Object.assign(new Error('Log truncated while reading'), { code: 'EAGAIN' });
+      const end = buffer.lastIndexOf(10) + 1;
+      let begin = 0, header = '';
+      if (!append && offset > 0) {
+        const firstLine = buffer.indexOf(10);
+        begin = firstLine < 0 ? end : firstLine + 1;
+        header = (await readAt(file, 0, Math.min(MAX_HEADER_BYTES, size))).toString('utf8');
+      }
+      const complete = buffer.subarray(begin, end).toString('utf8');
+      nextOffset = offset + end;
+      anchors = await writeAnchors(file, nextOffset);
+      if (append) cursor.feed(complete);
+      else {
+        startOffset = offset;
+        cursor = createJsonlCursor(complete, candidate.provider, header, {
+          truncated: offset > 0, isSubagent,
+          sessionId: candidate.provider === 'antigravity' ? antigravitySessionIdFromPath(candidate.path) : undefined
+        });
+      }
+    }
+    if (startOffset > 0) {
       sourceWarnings.push(`${candidate.provider}：较大会话只读取末尾 16 MiB，缺少开头的轮次不计入。`);
     }
-    // Writers append JSONL a line at a time; an unfinished final line is not evidence.
-    text = text.slice(0, text.lastIndexOf('\n') + 1);
-    const pathSessionId = candidate.provider === 'antigravity' ? antigravitySessionIdFromPath(candidate.path) : null;
     const native = candidate.provider === 'antigravity'
       ? await readAntigravityTimings(candidate.path, message => sourceWarnings.push(message))
       : undefined;
-    const parsed = parseJsonl(text, candidate.provider, header, { truncated: offset > 0, isSubagent, sessionId: pathSessionId, native });
-    const sessionId = parsed.sessionId || path.basename(candidate.path, '.jsonl');
+    const sessionId = cursor.sessionId || path.basename(candidate.path, '.jsonl');
     const session = { id: `${candidate.provider}:${sessionId || identity(candidate.path)}`,
       title: `${candidate.provider} · ${sessionId.slice(-20)}`, provider: candidate.provider,
-      path: candidate.path, updatedAt: candidate.info.mtimeMs, records: parsed.records,
-      ...(parsed.cwd ? { cwd: parsed.cwd } : {}) };
-    const result = { stamp, session, sourceSessionId: parsed.sessionId, warnings: sourceWarnings };
+      path: candidate.path, updatedAt: candidate.info.mtimeMs, records: cursor.finish(native),
+      ...(cursor.cwd ? { cwd: cursor.cwd } : {}) };
+    const result = { stamp, sourceStamp, identity: fileIdentity(candidate.info), size: candidate.info.size,
+      cursor, nextOffset, anchors, startOffset, session, sourceSessionId: cursor.sessionId, warnings: sourceWarnings };
     replayWarnings(warnings, result);
     parseCache.set(key, result); trimCache(parseCache);
     return matches(result) ? session : null;
-  } finally { await file.close(); }
+  } catch (error) {
+    // A mutable cursor may have advanced before a source read failed.
+    parseCache.delete(key);
+    throw error;
+  } finally { await file?.close(); }
 }
 
 /** Collect Claude subagent JSONL files at fixed depths matching CC Switch's collect_jsonl_files. */
@@ -302,9 +420,49 @@ function projectedData() {
     'finish',json_extract(data,'$.finish'), 'status',json_extract(data,'$.status')) ELSE '{}' END AS data`;
 }
 
+function readOpenCodeRecords(db, database, provider, table, v2, columns, sessionId) {
+  const orderColumn = v2 ? 'seq' : 'rowid';
+  const type = v2 ? 'type' : 'NULL AS type';
+  const fields = `id,${type},time_created,${projectedData()}`;
+  const scope = `FROM ${table} WHERE session_id=?`;
+  const window = `ORDER BY ${orderColumn} DESC LIMIT 10001`;
+  const rows = () => db.prepare(`SELECT ${fields} ${scope} ${window}`).all(sessionId);
+  if (!columns.has('time_updated')) {
+    const batch = rows();
+    const truncated = batch.length > 10_000;
+    return { truncated, records: parseOpenCodeRows(batch.slice(0, 10_000).reverse(), v2) };
+  }
+
+  const key = JSON.stringify([database.path, fileIdentity(database.info), provider, sessionId]);
+  const previous = databaseRows.get(key);
+  const marks = db.prepare(`SELECT id,${type},time_created,time_updated,${orderColumn} AS position ${scope} ${window}`).all(sessionId);
+  const truncated = marks.length > 10_000;
+  if (truncated) marks.pop();
+  const signatures = marks.map(row => JSON.stringify([row.type, row.time_created, row.time_updated, row.position]));
+  const changed = previous ? marks.filter((row, index) => index < 8 || row.time_updated == null ||
+    previous.get(row.id)?.signature !== signatures[index]) : marks;
+  let fresh;
+  if (previous && changed.length <= 64 && changed.length < marks.length) {
+    const row = db.prepare(`SELECT ${fields} ${scope} AND id=?`);
+    fresh = new Map(changed.map(item => [item.id, row.get(sessionId, item.id)]));
+  } else {
+    fresh = new Map(rows().slice(0, 10_000).map(row => [row.id, row]));
+  }
+  const next = new Map();
+  for (let index = 0; index < marks.length; index++) {
+    const { id } = marks[index];
+    const row = fresh.get(id) ?? previous?.get(id)?.row;
+    if (row) next.set(id, { signature: signatures[index], row });
+  }
+  databaseRows.delete(key);
+  databaseRows.set(key, next);
+  trimCache(databaseRows, 16);
+  return { truncated, records: parseOpenCodeRows([...next.values()].reverse().map(item => item.row), v2) };
+}
+
 async function readDatabase(candidate, maxSessions, warnings, target) {
   const wal = await info(`${candidate.path}-wal`);
-  const stamp = `${candidate.info.size}:${candidate.info.mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}:${maxSessions}`;
+  const stamp = [fileStamp(candidate.info), wal ? fileStamp(wal) : '', maxSessions].join(':');
   const cacheKey = target?.cwdFilter
     ? JSON.stringify([candidate.path, 'cwd', target.cwdFilter, target.platform || ''])
     : target ? JSON.stringify([candidate.path, target.provider, target.sessionId]) : candidate.path;
@@ -316,7 +474,7 @@ async function readDatabase(candidate, maxSessions, warnings, target) {
   let db;
   try {
     db = new DatabaseSync(candidate.path, { readOnly: true, enableExtensionLoading: false });
-    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; PRAGMA trusted_schema=OFF;');
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; PRAGMA trusted_schema=OFF; BEGIN;');
     const available = tables(db), sessions = [], seen = new Set(), sourceWarnings = new Set();
     for (const v2 of [true, false]) {
       if (target && !target.cwdFilter && (target.provider === 'opencode2') !== v2) continue;
@@ -347,11 +505,9 @@ async function readDatabase(candidate, maxSessions, warnings, target) {
       for (const meta of metadata) {
         if (seen.has(meta.id)) continue;
         seen.add(meta.id);
-        const orderColumn = v2 ? 'seq' : 'rowid';
-        const messageRows = db.prepare(`SELECT id,${v2 ? 'type' : 'NULL AS type'},time_created,${projectedData()}
-          FROM ${messageTable} WHERE session_id=? ORDER BY ${orderColumn} DESC LIMIT 10001`).all(meta.id);
-        if (messageRows.length > 10_000) { messageRows.pop(); sourceWarnings.add('OpenCode：较大会话仅读取最近 10000 条消息。'); }
-        const provider = v2 ? 'opencode2' : 'opencode', records = parseOpenCodeRows(messageRows.reverse(), v2);
+        const provider = v2 ? 'opencode2' : 'opencode';
+        const { records, truncated } = readOpenCodeRecords(db, candidate, provider, messageTable, v2, messageColumns, meta.id);
+        if (truncated) sourceWarnings.add('OpenCode：较大会话仅读取最近 10000 条消息。');
         sessions.push({ id: `${provider}:${meta.id}`, title: safeTitle(meta.title) || `${provider} · ${String(meta.id).slice(-20)}`,
           provider, path: candidate.path, updatedAt: Number.isFinite(meta.time_updated) ? meta.time_updated : candidate.info.mtimeMs,
           ...(typeof meta.directory === 'string' ? { cwd: meta.directory } : {}), records });
@@ -375,7 +531,7 @@ async function readCcSwitchProxyRows(dbPath, provider, sessionId, records) {
   const wal = await info(`${canonical}-wal`);
   const minSec = records.length ? Math.min(...records.map(r => r.createdAtSec)) - SESSION_PROXY_DEDUP_WINDOW_SECONDS : null;
   const maxSec = records.length ? Math.max(...records.map(r => r.createdAtSec)) + SESSION_PROXY_DEDUP_WINDOW_SECONDS : null;
-  const stamp = `${dbInfo.size}:${dbInfo.mtimeMs}:${wal?.size ?? 0}:${wal?.mtimeMs ?? 0}`;
+  const stamp = fileStamp(dbInfo) + ':' + (wal ? fileStamp(wal) : '');
   const cacheKey = JSON.stringify([canonical, provider, sessionId, minSec, maxSec]);
   const cached = ccSwitchCache.get(cacheKey);
   if (cached?.stamp === stamp) return cached.rows;
@@ -441,9 +597,9 @@ function bestSession(sessions) {
 
 async function headerMeta(candidate, budget) {
   const cacheKey = `${candidate.provider}:${candidate.path}`;
-  const stamp = `${candidate.info.size}:${candidate.info.mtimeMs}`;
+  const stamp = fileStamp(candidate.info), identity = fileIdentity(candidate.info), size = candidate.info.size;
   const mainCached = parseCache.get(`${cacheKey}:main`);
-  if (mainCached?.stamp === stamp) {
+  if (mainCached?.sourceStamp === stamp) {
     return { stamp, sessionId: mainCached.sourceSessionId ?? null, cwd: mainCached.session?.cwd ?? null };
   }
   const cached = headerCache.get(cacheKey);
@@ -453,20 +609,33 @@ async function headerMeta(candidate, budget) {
   if (firstBytes > budget.remaining) return null;
   const file = await open(candidate.path, 'r');
   try {
+    const reusable = cached?.identity === identity && cached.size < size && cached.sessionId && cached.cwd ? cached : null;
+    if (reusable && await matchAnchors(file, reusable.anchors, budget)) {
+      const meta = { ...reusable, stamp, size };
+      headerCache.set(cacheKey, meta);
+      return meta;
+    }
+    if (firstBytes > budget.remaining) return null;
     let length = firstBytes;
     let parsed = { sessionId: null, cwd: null };
+    let anchor;
     while (true) {
       budget.remaining -= length === firstBytes ? firstBytes : (length - firstBytes);
       const buffer = Buffer.alloc(length), result = await file.read(buffer, 0, length, 0);
       const text = buffer.subarray(0, result.bytesRead).toString('utf8');
       const nl = text.lastIndexOf('\n');
-      if (nl >= 0) parsed = parseJsonl(text.slice(0, nl + 1), candidate.provider);
+      if (nl >= 0) parsed = readJsonlMetadata(text.slice(0, nl + 1), candidate.provider);
+      if (length > 0 && !anchor) {
+        const head = buffer.subarray(0, Math.min(result.bytesRead, CURSOR_ANCHOR_BYTES));
+        if (head.length) anchor = { start: 0, length: head.length, hash: createHash('sha256').update(head).digest('hex') };
+      }
       if ((nl >= 0 && parsed.sessionId && parsed.cwd) || length >= maxBytes) break;
       // Budget exhaustion is temporary: do not cache an incomplete header as missing metadata.
       if ((maxBytes - length) > budget.remaining) return null;
       length = maxBytes;
     }
-    const meta = { stamp, sessionId: parsed.sessionId ?? null, cwd: parsed.cwd ?? null };
+    const meta = { stamp, identity, size, anchors: anchor ? [anchor] : [],
+      sessionId: parsed.sessionId ?? null, cwd: parsed.cwd ?? null };
     headerCache.set(cacheKey, meta); trimCache(headerCache, 2000);
     return meta;
   } finally { await file.close(); }
@@ -638,6 +807,21 @@ async function readChannelSessions(target, options = {}) {
       }
     }
 
+    const agyFiles = new Set();
+    for (const root of (roots.antigravity ?? []).slice(0, 100)) {
+      for (const file of await discover('antigravity', root, warnings, { maxAgeMs })) agyFiles.add(file);
+    }
+    for (const file of agyFiles) {
+      try {
+        const sessionId = antigravitySessionIdFromPath(file);
+        if (!sessionId || bySessionId.has('antigravity:' + sessionId) || await antigravityWorkspace(file, platform) !== wantedCwd) continue;
+        const candidate = await candidateFor('antigravity', file);
+        if (candidate) preferBetterSession(bySessionId, await readJsonl(candidate, budget, warnings, sessionId));
+      } catch {
+        warnings.add('antigravity：部分会话的项目位置暂时无法读取。');
+      }
+    }
+
     const seenDbPaths = new Set();
     for (const root of (roots.opencode ?? []).slice(0, 10)) {
       for (const file of await discover('opencode', root, warnings, { maxAgeMs })) {
@@ -692,6 +876,91 @@ export async function readTargetSession(target, options = {}) {
     return readChannelSessions(target, options);
   }
   return readSingleTargetSession(target, options);
+}
+
+/** File signals keep the 250 ms check cheap when every transcript is quiet. */
+export function createLiveSessionReader() {
+  const watchers = new Map(), snapshots = new Map();
+  let version = 0, watchFailed = false, checkedRootsAt = -Infinity, rootsKey, configuring, closed = false;
+
+  function observe(directory, recursive) {
+    const existing = watchers.get(directory);
+    if (existing?.recursive || (existing && !recursive)) return;
+    if (recursive && (directory === path.parse(directory).root || directory === homedir())) return;
+    if (watchers.size >= 64 && !existing) { watchFailed = true; return; }
+    try {
+      existing?.watcher.close();
+      watchers.delete(directory);
+      const watcher = watch(directory, { recursive, persistent: false }, (kind, filename) => {
+        if (filename && /-shm$/i.test(filename)) return;
+        if (!filename || kind === 'rename') {
+          discoveryCache.clear();
+          version++;
+        } else if (/\.(?:jsonl|db|sqlite|sqlite3)(?:-wal)?$/i.test(filename)) {
+          version++;
+        }
+      });
+      watcher.on('error', () => {
+        watcher.close();
+        if (watchers.get(directory)?.watcher === watcher) watchers.delete(directory);
+        watchFailed = true;
+        version++;
+      });
+      watchers.set(directory, { watcher, recursive });
+    } catch { watchFailed = true; }
+  }
+
+  async function refreshWatches(roots) {
+    const key = JSON.stringify(roots ?? {});
+    if (configuring) await configuring;
+    if (closed || (rootsKey === key && Date.now() - checkedRootsAt < 30_000)) return;
+    rootsKey = key;
+    checkedRootsAt = Date.now();
+    configuring = (async () => {
+      const directories = await configuredRoots(roots);
+      if (closed) return;
+      watchFailed = false;
+      for (const source of new Set(Object.values(directories).flat())) {
+        const meta = await info(source);
+        if (closed) return;
+        if (meta?.isDirectory()) observe(source, true);
+        else if (meta?.isFile()) observe(path.dirname(source), false);
+      }
+      const proxy = defaultRoots().ccSwitchDb;
+      if (!closed && (await info(path.dirname(proxy)))?.isDirectory()) observe(path.dirname(proxy), false);
+    })().finally(() => { configuring = null; });
+    await configuring;
+  }
+
+  async function read(target, options = {}) {
+    await refreshWatches(options.roots);
+    if (closed) return { session: null, warnings: [] };
+    for (const session of target.sessions ?? []) {
+      const explicit = session.transcriptPath ?? session.dbPath;
+      if (!explicit) continue;
+      const directory = path.dirname(explicit);
+      if (!watchers.has(directory) && (await info(directory))?.isDirectory() && !closed) observe(directory, false);
+    }
+    const key = JSON.stringify([target.key, target.worktreePath, target.sessions, rootsKey]);
+    const saved = snapshots.get(key);
+    const at = Date.now();
+    if (!options.fresh && saved?.version === version && at - saved.at < (watchFailed ? 250 : 4000)) return saved.result;
+    const observedVersion = version;
+    const result = await readTargetSession(target, options);
+    snapshots.delete(key);
+    snapshots.set(key, { version: observedVersion, at, result });
+    trimCache(snapshots, 64);
+    return result;
+  }
+
+  function close() {
+    closed = true;
+    for (const { watcher } of watchers.values()) watcher.close();
+    watchers.clear();
+    snapshots.clear();
+  }
+
+  return { read, close };
 }
 
 // ---- Usage totals: every session written in the last 30 days, read whole, once per change. ----

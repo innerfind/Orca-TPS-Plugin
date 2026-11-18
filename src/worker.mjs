@@ -1,19 +1,41 @@
-import { readTargetSession, discoverUsageUnits } from './data.mjs';
+import { createLiveSessionReader, discoverUsageUnits } from './data.mjs';
 import { readActiveConversation } from './active-conversation.mjs';
 import { createTpsController } from './controller.mjs';
+import { createRemoteChannelReader, createRemoteUsageReader } from './remote-channel.mjs';
+import { createChannelCache } from './channel-cache.mjs';
 import { createUsageIndex } from './usage-summary.mjs';
 
 // Backfill runs quickly while files are pending; once every unit is current, refresh slowly.
 const BACKFILL_DELAY_MS = 15_000, IDLE_DELAY_MS = 60_000, FIRST_DELAY_MS = 3_000;
 
-let controller, usage, timer, handler, running = false;
+let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, running = false;
 
 export default async function activate(orca) {
-  deactivate();
+  await deactivate();
   running = true;
-  controller = createTpsController(orca, { readSession: readTargetSession, readActive: readActiveConversation });
+  const remoteReader = remote = createRemoteChannelReader(orca);
+  const localReader = local = createLiveSessionReader();
+  const channelCache = cache = createChannelCache(orca.storage);
+  controller = createTpsController(orca, {
+    cache: channelCache,
+    pollMs: 250,
+    readActive: () => readActiveConversation({ includeRemote: true, includeOpen: true }),
+    readSession: (target, options) => target.executionHostId
+      ? remoteReader.read(target, options)
+      : localReader.read(target, options),
+    onOpenTargets: remoteReader.setTargets
+  });
   await controller.start({ background: true });
-  usage = createUsageIndex({ storage: orca.storage, discover: discoverUsageUnits, log: message => orca.log(message) });
+  const history = remoteUsage = createRemoteUsageReader(orca);
+  usageAbort = new AbortController();
+  usage = createUsageIndex({
+    storage: orca.storage,
+    async discover(cutoffMs) {
+      const [localUnits, remoteUnits] = await Promise.all([discoverUsageUnits(cutoffMs), history.discover(cutoffMs)]);
+      return { ...remoteUnits, descriptors: [...localUnits, ...remoteUnits.descriptors] };
+    },
+    log: message => orca.log(message)
+  });
   void usage.ready();
   handler = orca.panels.handle('tps.summary', async () => {
     await usage.ready();
@@ -29,16 +51,19 @@ function schedule(orca, delay) {
 
 async function tick(orca) {
   if (!running) return;
+  const index = usage, history = remoteUsage, signal = usageAbort.signal;
   let pending = 0;
   try {
-    ({ pending } = await usage.refresh());
+    ({ pending } = await index.refresh({ signal }));
   } catch (error) {
-    orca.log(`统计刷新失败：${error?.message ?? 'unknown'}`);
+    if (!signal.aborted) orca.log(`统计刷新失败：${error?.message ?? 'unknown'}`);
+  } finally {
+    await history.finish();
   }
-  if (running) schedule(orca, pending > 0 ? BACKFILL_DELAY_MS : IDLE_DELAY_MS);
+  if (running && usage === index) schedule(orca, pending > 0 ? BACKFILL_DELAY_MS : IDLE_DELAY_MS);
 }
 
-export function deactivate() {
+export async function deactivate() {
   running = false;
   clearTimeout(timer);
   timer = undefined;
@@ -47,4 +72,15 @@ export function deactivate() {
   controller?.stop();
   controller = undefined;
   usage = undefined;
+  usageAbort?.abort();
+  usageAbort = undefined;
+  const history = remoteUsage;
+  remoteUsage = undefined;
+  const remoteReader = remote;
+  remote = undefined;
+  local?.close();
+  local = undefined;
+  const channelCache = cache;
+  cache = undefined;
+  await Promise.all([remoteReader?.dispose(), history?.dispose(), channelCache?.flush()]);
 }
