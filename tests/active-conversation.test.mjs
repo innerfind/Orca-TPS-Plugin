@@ -138,6 +138,24 @@ test('remote, missing, or unsynced workspaces never return a target', () => {
   }
 });
 
+test('remote channels keep POSIX paths on Windows and exclude sessions from another host', () => {
+  const s = state();
+  const host = s.activeWorkspaceExecutionHostId = 'runtime:one';
+  const [first, second] = s.tabsByWorktree[s.activeWorktreeId];
+  first.executionHostId = host;
+  second.executionHostId = 'runtime:two';
+  s.sleepingAgentSessionsByPaneKey['a:leaf'].executionHostId = host;
+  const remote = { ...options(), platform: 'win32', includeRemote: true };
+  const firstTarget = selectActiveConversation(s, remote).target;
+  assert.equal(firstTarget.worktreePath, '/workspace/orca-tps/1.5.0');
+  assert.equal(firstTarget.executionHostId, host);
+  assert.deepEqual(firstTarget.sessions.map(item => item.sessionId), ['session-a']);
+  s.activeWorkspaceExecutionHostId = second.executionHostId;
+  const otherTarget = selectActiveConversation(s, remote).target;
+  assert.notEqual(otherTarget.key, firstTarget.key);
+  assert.deepEqual(otherTarget.sessions.map(item => item.sessionId), ['session-b']);
+});
+
 test('conflicting pane metadata, remote panes, and relative paths are excluded from channel sessions', () => {
   const w = 'synthetic-only';
   for (const modify of [

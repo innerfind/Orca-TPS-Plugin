@@ -331,6 +331,32 @@ test('a thrown read error keeps the last records with a recovery hint', async ()
   controller.stop();
 });
 
+test('a disconnected remote channel retains its records and last successful refresh time', async t => {
+  const host = fakeHost();
+  const remote = { key: 'remote', worktreeId: 'project', executionHostId: 'runtime:host', sessions: [] };
+  let now = 100, connected = true;
+  const controller = createTpsController(host.orca, {
+    now: () => now,
+    focusPollMs: 0,
+    readActive: async () => ({ target: remote }),
+    readSession: async () => connected
+      ? { session: { id: 'channel:project', provider: 'channel', records: [{ tokensPerSecond: 25 }] } }
+      : { session: null, warnings: ['远程连接中断'] }
+  });
+  t.after(controller.stop);
+  await controller.start();
+  connected = false;
+  now = 200;
+  await controller.refresh();
+  assert.equal(controller.state().records[0].tokensPerSecond, 25);
+  assert.equal(controller.state().updatedAt, 100);
+  assert.deepEqual(controller.state().warnings, ['远程连接中断']);
+  connected = true;
+  await controller.refresh();
+  assert.equal(controller.state().updatedAt, 200);
+  assert.deepEqual(controller.state().warnings, []);
+});
+
 test('legacy custom roots remain bounded and validated without exposing a settings UI', () => {
   assert.deepEqual(validateRoots({ codex: [' ~/sessions ', '~/sessions', ''] }).codex, ['~/sessions']);
   assert.throws(() => validateRoots({ codex: ['https://example.com'] }), /本机/);

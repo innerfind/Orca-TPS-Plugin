@@ -66,6 +66,15 @@
   "capabilities": [
     {
       "kind": "storage:own"
+    },
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "terminal:read"
+    },
+    {
+      "kind": "terminal:send"
     }
   ]
 }

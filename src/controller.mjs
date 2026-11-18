@@ -53,7 +53,7 @@ const TRANSIENT_PAGE_PATTERNS = [
 
 export function createTpsController(orca, {
   readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 250,
-  holdActivityMs = 120_000
+  holdActivityMs = 120_000, onTargetChange = () => {}
 } = {}) {
   const instanceId = randomUUID();
   let target = null, key = null, sessionsSig = '', session = null;
@@ -178,6 +178,7 @@ export function createTpsController(orca, {
       }
       target = next;
       emptyMessage = message;
+      if (changed) onTargetChange(target);
       if (changed || messageChanged || loadingCleared) void publish();
     })();
     contextPending = task;
@@ -210,14 +211,14 @@ export function createTpsController(orca, {
           // instead of wiping the panel; surface the reason as a warning.
           const missWarning = cleanText((result.warnings ?? [])[0], 500);
           warnings = missWarning ? [missWarning] : warnings;
-          updatedAt = now();
+          if (!requestedTarget.executionHostId) updatedAt = now();
         }
       } catch {
         if (stopped || requestedGeneration !== generation) return state();
         // Read failure: retain the last good records so a transient I/O error
         // does not blank the panel; only the warning changes.
         warnings = ['当前对话的记录读取失败，保留上次统计，请稍后刷新。'];
-        updatedAt = now();
+        if (!requestedTarget.executionHostId) updatedAt = now();
       }
       loading = false;
       void publish();

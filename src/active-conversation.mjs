@@ -50,20 +50,24 @@ function channelShortTitle(worktreePath) {
 
 /**
  * Pure channel selection: resolves the active project channel (worktree) and collects
- * all validated local terminal pane sessions in that channel plus its worktree path.
+ * validated terminal sessions on that channel's execution host plus its worktree path.
  */
 export function selectActiveConversation(state, options = {}) {
   const w = text(state?.activeWorktreeId);
   if (!w) return empty('当前没有打开对话。');
-  const host = state.activeWorkspaceExecutionHostId;
-  if (host != null && host !== 'local') return empty('当前是远程对话，暂不读取远程统计。');
+  const host = state.activeWorkspaceExecutionHostId ?? 'local';
+  const remote = typeof host === 'string' && /^(?:runtime|ssh):[^\s]+$/.test(host);
+  if (host !== 'local' && (!remote || !options.includeRemote)) return empty('当前是远程对话，暂不读取远程统计。');
   const workspaceKey = text(state.activeWorkspaceKey);
   if (workspaceKey && workspaceKey !== `worktree:${w}`) return empty('当前工作区状态尚未同步。');
 
   const pathApi = (options.platform || process.platform) === 'win32' ? path.win32 : path.posix;
   const sepIdx = w.indexOf('::');
   const rawWorktreePath = sepIdx >= 0 ? text(w.slice(sepIdx + 2)) : null;
-  let worktreePath = rawWorktreePath && pathApi.isAbsolute(rawWorktreePath) ? rawWorktreePath : null;
+  const absolute = value => value && (remote
+    ? path.posix.isAbsolute(value) || path.win32.isAbsolute(value)
+    : pathApi.isAbsolute(value));
+  let worktreePath = absolute(rawWorktreePath) ? rawWorktreePath : null;
 
   const unified = list(own(state.unifiedTabs, w));
   const tabs = list(own(state.tabsByWorktree, w));
@@ -73,7 +77,7 @@ export function selectActiveConversation(state, options = {}) {
 
   for (const tab of tabs) {
     if (!object(tab) || !text(tab.id) || tab.worktreeId !== w) continue;
-    if (tab.executionHostId != null && tab.executionHostId !== 'local') continue;
+    if (tab.executionHostId != null && tab.executionHostId !== host) continue;
     const tabId = tab.id;
     const layout = own(state.terminalLayoutsByTabId, tabId);
     const leaves = leafIds(layout?.root);
@@ -86,7 +90,11 @@ export function selectActiveConversation(state, options = {}) {
       if (!object(record) || record.paneKey !== paneKey || record.worktreeId !== w || (record.tabId != null && record.tabId !== tabId)) {
         continue;
       }
-      if (record.connectionId != null) continue;
+      const sameSshHost = record.connectionId != null && host === `ssh:${record.connectionId}`;
+      if (record.executionHostId != null && record.executionHostId !== host) continue;
+      const sameRemoteHost = sameSshHost || record.executionHostId === host ||
+        (record.connectionId == null && tab.executionHostId === host);
+      if (remote ? !sameRemoteHost : record.connectionId != null) continue;
       const provider = providerName(record.agent), sessionId = text(record.providerSession?.id);
       if (!provider || !sessionId || sessionId.length > 512) continue;
 
@@ -101,7 +109,7 @@ export function selectActiveConversation(state, options = {}) {
       const capturedAt = Number.isFinite(record.capturedAt) ? record.capturedAt : 0;
       if (Number.isFinite(tab.createdAt) && capturedAt && tab.createdAt > capturedAt) continue;
 
-      const stampKey = JSON.stringify([options.userDataPath || '', options.profileId || '', w, tabId, leafId]);
+      const stampKey = JSON.stringify([options.userDataPath || '', options.profileId || '', host, w, tabId, leafId]);
       const incarnation = text(own(state.terminalPtyIncarnationsByPaneKey, paneKey)) || text(own(layout?.ptyIdsByLeafId, leafId)) || null;
       const prior = history.get(stampKey);
       const signature = `${provider}:${sessionId}`;
@@ -116,7 +124,7 @@ export function selectActiveConversation(state, options = {}) {
       if (pendingCaptureBaseline !== null) continue;
 
       const transcriptPath = text(record.providerSession?.transcriptPath);
-      if (transcriptPath && !pathApi.isAbsolute(transcriptPath)) continue;
+      if (transcriptPath && !absolute(transcriptPath)) continue;
       const entry = { provider, sessionId };
       if (transcriptPath) {
         if (family(provider) === 'opencode' && /\.(?:db|sqlite|sqlite3)$/i.test(transcriptPath)) entry.dbPath = transcriptPath;
@@ -131,17 +139,18 @@ export function selectActiveConversation(state, options = {}) {
       }
 
       const paneCwd = text(record.providerSession?.cwd);
-      if (paneCwd && pathApi.isAbsolute(paneCwd)) paneCwds.add(paneCwd);
+      if (absolute(paneCwd)) paneCwds.add(paneCwd);
       fallbackTitle ??= text(tab.customTitle) || (leaves.length === 1 ? text(tab.aiVaultTitle?.title) : null) || text(record.terminalTitle);
     }
   }
 
   if (!worktreePath && paneCwds.size === 1) worktreePath = [...paneCwds][0];
-  if (!worktreePath && !sessions.length) return empty('当前频道暂无可统计的对话。');
+  if (!remote && !worktreePath && !sessions.length) return empty('当前频道暂无可统计的对话。');
 
   const target = {
-    key: JSON.stringify([options.userDataPath || '', options.profileId || '', w, worktreePath || '']),
+    key: JSON.stringify([options.userDataPath || '', options.profileId || '', w, worktreePath || '', ...(remote ? [host] : [])]),
     worktreeId: w,
+    ...(remote ? { executionHostId: host } : {}),
     ...(worktreePath ? { worktreePath } : {}),
     sessions
   };
@@ -225,7 +234,7 @@ export async function readActiveConversation(options = {}) {
     // One read transaction so the stamp, the legacy document and its parts come from the same commit.
     db.exec('BEGIN');
     const revision = workspaceStamp(db);
-    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform, revision]);
+    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform, Boolean(options.includeRemote), revision]);
     if (cacheKey && lastSelection?.key === cacheKey) return copySelection(lastSelection.result);
     let state = null;
     try { state = readWorkspaceParts(db); }
