@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTpsController, validateRoots } from '../src/controller.mjs';
+import { createChannelCache } from '../src/channel-cache.mjs';
 
 function fakeHost(saved = null) {
   const handlers = new Map(), statuses = [], posts = [];
@@ -355,6 +356,49 @@ test('a disconnected remote channel retains its records and last successful refr
   await controller.refresh();
   assert.equal(controller.state().updatedAt, 200);
   assert.deepEqual(controller.state().warnings, []);
+});
+
+test('open channels are collected in the background and switching displays cached data before I/O replies', async t => {
+  const host = fakeHost();
+  const storage = new Map();
+  host.orca.storage = { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) };
+  const cache = createChannelCache(host.orca.storage, { now: () => 500 });
+  const local = { key: 'local', worktreeId: 'local', sessions: [] };
+  const remote = { key: 'remote', worktreeId: 'remote', executionHostId: 'runtime:host', sessions: [] };
+  const partial = deferred(), requests = [];
+  let current = local, pause = false;
+  const reply = worktreeId => ({
+    session: { provider: 'channel', id: 'channel:' + worktreeId, records: [
+      { id: worktreeId, provider: 'codex', completedAt: 400, tokensPerSecond: worktreeId === 'local' ? 30 : 75 }
+    ] },
+    warnings: []
+  });
+  const controller = createTpsController(host.orca, {
+    cache, focusPollMs: 0, now: () => 500,
+    readActive: async () => ({ target: current, openTargets: [local, remote] }),
+    readSession: async target => {
+      requests.push(target.worktreeId);
+      if (pause && target.worktreeId === remote.worktreeId) return partial.promise;
+      return reply(target.worktreeId);
+    }
+  });
+  t.after(() => controller.stop());
+  await controller.start();
+  await settle();
+  await cache.flush();
+  assert.deepEqual(requests, ['local', 'remote']);
+  assert.equal(storage.size, 2);
+  pause = true;
+  current = remote;
+  const switched = controller.checkActive();
+  await settle();
+  assert.equal(controller.state().records[0].tokensPerSecond, 75);
+  assert.equal(controller.state().updatedAt, 500);
+  assert.equal(controller.state().loading, false);
+  const posts = host.posts.length;
+  partial.resolve(reply('remote'));
+  await switched;
+  assert.equal(host.posts.length, posts, 'same records must not refresh the panel');
 });
 
 test('legacy custom roots remain bounded and validated without exposing a settings UI', () => {

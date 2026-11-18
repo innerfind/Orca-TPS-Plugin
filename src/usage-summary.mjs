@@ -3,6 +3,8 @@
 // re-read when its stamp changes. Stored values are counts keyed by day, agent and model; no message text.
 
 export const UNIT_KEY_PREFIX = 'usage:unit:';
+export const REMOTE_USAGE_PREFIX = 'remote:';
+export const USAGE_READ_BATCH = 16;
 export const WINDOWS = [['today', 1], ['week', 7], ['month', 30]];
 export const MAX_WINDOW_DAYS = 30;
 // The heatmap shows a year, so the index keeps a year of per-day counts; windows still use the spans above.
@@ -196,12 +198,19 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     return loaded;
   };
 
-  async function refresh() {
+  async function refresh({ signal } = {}) {
     await ready();
-    const descriptors = await discover(usageCutoffMs(now()));
+    signal?.throwIfAborted();
+    const discovery = await discover(usageCutoffMs(now()));
+    signal?.throwIfAborted();
+    const { descriptors, coveredRemoteScopes } = Array.isArray(discovery)
+      ? { descriptors: discovery, coveredRemoteScopes: new Set() }
+      : discovery;
     const wanted = new Set(descriptors.map(descriptor => descriptor.key));
     for (const key of [...units.keys()]) {
+      signal?.throwIfAborted();
       if (wanted.has(key)) continue;
+      if (key.startsWith(REMOTE_USAGE_PREFIX) && !coveredRemoteScopes.has(key.slice(0, key.lastIndexOf(':') + 1))) continue;
       units.delete(key);
       await storage.delete(UNIT_KEY_PREFIX + key).catch(() => {});
     }
@@ -222,15 +231,39 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     };
     const pending = descriptors.filter(descriptor => needsRead(descriptor) && !deferred(descriptor) && !waitingRetry(descriptor))
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
-    let spent = 0, processed = 0;
+    let spent = 0;
+    const selected = [];
     for (const descriptor of pending) {
-      if (processed > 0 && spent + descriptor.bytes > budgetBytes) break;
+      if (selected.length && spent + descriptor.bytes > budgetBytes) break;
       spent += descriptor.bytes;
-      processed += 1;
+      selected.push(descriptor);
+    }
+    // Only selected, changed units are fetched. Share one SSH request per batch without
+    // reading local files concurrently or taking work out of the existing byte budget.
+    const groups = Map.groupBy(selected.filter(descriptor => descriptor.readMany), descriptor => descriptor.readMany);
+    const buffered = new Map();
+    async function readDays(descriptor) {
+      if (!descriptor.readMany) return descriptor.read();
+      const { key, readMany } = descriptor;
+      if (!buffered.has(key)) {
+        const batch = groups.get(readMany).splice(0, USAGE_READ_BATCH);
+        let results;
+        try { results = await readMany(batch.map(item => item.key)); }
+        catch { /* Each failed unit keeps its last totals and is retried individually. */ }
+        for (const item of batch) buffered.set(item.key, results?.get(item.key));
+      }
+      const days = buffered.get(key);
+      buffered.delete(key);
+      if (!days) throw new Error('remote_usage_unavailable');
+      return days;
+    }
+    for (const descriptor of selected) {
+      signal?.throwIfAborted();
       let unit;
       try {
-        unit = { stamp: descriptor.stamp, days: await descriptor.read(), readAt: now(), schema: USAGE_SCHEMA };
+        unit = { stamp: descriptor.stamp, days: await readDays(descriptor), readAt: now(), schema: USAGE_SCHEMA };
       } catch (error) {
+        signal?.throwIfAborted();
         // Keep the last successful counts and retry even when a transient failure leaves the file unchanged.
         // Persist the retry deadline as well, so a worker restart cannot turn the failure into an empty success.
         const current = units.get(descriptor.key);
@@ -242,6 +275,7 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
         };
         log(`统计读取失败（${error?.code ?? error?.message ?? 'unknown'}）`);
       }
+      signal?.throwIfAborted();
       units.set(descriptor.key, unit);
       try { await storage.set(UNIT_KEY_PREFIX + descriptor.key, unit); }
       catch (error) { log(`统计索引写入失败：${error?.message ?? 'unknown'}`); }

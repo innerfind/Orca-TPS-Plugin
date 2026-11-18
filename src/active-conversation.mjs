@@ -159,6 +159,32 @@ export function selectActiveConversation(state, options = {}) {
   return { target };
 }
 
+export function selectOpenChannels(state, byHost, options, active = selectActiveConversation(state, options).target) {
+  const channels = new Map();
+  if (active) channels.set(active.key, active);
+  const userTab = tab => (tab?.customTitle ?? tab?.title ?? tab?.label) !== 'TPS 远程统计';
+
+  for (const [host, workspace] of [['local', state], ...Object.entries(byHost ?? {})]) {
+    if (!object(workspace) || (host !== 'local' && !/^(?:runtime|ssh):[^\s]+$/.test(host))) continue;
+    const ids = new Set(list(workspace.activeWorktreeIdsOnShutdown).filter(text));
+    for (const groups of [workspace.tabsByWorktree, workspace.unifiedTabs]) {
+      for (const [id, tabs] of Object.entries(groups ?? {})) {
+        if (list(tabs).some(tab => userTab(tab) && (!tab?.executionHostId || tab.executionHostId === host))) ids.add(id);
+      }
+    }
+    for (const id of ids) {
+      // In the legacy document, the active foreign workspace is handled above.
+      if (host === 'local' && workspace === state && active?.executionHostId && id === active.worktreeId) continue;
+      const target = selectActiveConversation({
+        ...workspace, activeWorktreeId: id, activeWorkspaceKey: 'worktree:' + id,
+        activeWorkspaceExecutionHostId: host
+      }, options).target;
+      if (target && !channels.has(target.key)) channels.set(target.key, target);
+    }
+  }
+  return [...channels.values()];
+}
+
 const MAX_STATE_BYTES = 8 * 1024 * 1024;
 const hasTable = (db, name) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));
 const hasColumn = (db, table, column) => db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
@@ -168,13 +194,13 @@ const hasColumn = (db, table, column) => db.prepare(`PRAGMA table_info(${table})
  * rewrite the legacy document occasionally. Like Orca's own reader, the parts are authoritative only
  * when their legacy_revision matches the legacy document's revision; otherwise return null.
  */
-function readWorkspaceParts(db) {
+function readWorkspaceParts(db, domain) {
   if (!hasTable(db, 'profile_state_document_parts') || !hasTable(db, 'profile_state_document_parts_meta')
     || !hasColumn(db, 'profile_state_documents', 'revision')) return null;
-  const meta = db.prepare("SELECT legacy_revision FROM profile_state_document_parts_meta WHERE domain='workspaceSession'").get();
-  const legacy = db.prepare("SELECT revision FROM profile_state_documents WHERE domain='workspaceSession'").get();
+  const meta = db.prepare('SELECT legacy_revision FROM profile_state_document_parts_meta WHERE domain=?').get(domain);
+  const legacy = db.prepare('SELECT revision FROM profile_state_documents WHERE domain=?').get(domain);
   if (!Number.isSafeInteger(meta?.legacy_revision) || meta.legacy_revision !== legacy?.revision) return null;
-  const rows = db.prepare("SELECT part_key, payload FROM profile_state_document_parts WHERE domain='workspaceSession' ORDER BY ordinal").all();
+  const rows = db.prepare('SELECT part_key, payload FROM profile_state_document_parts WHERE domain=? ORDER BY ordinal').all(domain);
   if (!rows.length) return null;
   let bytes = 0, state = {};
   for (const row of rows) {
@@ -197,55 +223,75 @@ function readWorkspaceParts(db) {
  * Cheap change marker for workspaceSession: Orca bumps these revisions on every save, so an
  * unchanged stamp means the selection cannot have changed. Null when the schema has no revisions.
  */
-function workspaceStamp(db) {
+function workspaceStamp(db, domains) {
   if (!hasColumn(db, 'profile_state_documents', 'revision')) return null;
-  const legacy = db.prepare("SELECT revision FROM profile_state_documents WHERE domain='workspaceSession'").get();
+  const legacy = db.prepare('SELECT revision FROM profile_state_documents WHERE domain=?');
   const parts = hasTable(db, 'profile_state_document_parts_meta')
-    ? db.prepare("SELECT revision, legacy_revision FROM profile_state_document_parts_meta WHERE domain='workspaceSession'").get()
+    ? db.prepare('SELECT revision, legacy_revision FROM profile_state_document_parts_meta WHERE domain=?')
     : null;
-  return JSON.stringify([legacy?.revision ?? null, parts?.revision ?? null, parts?.legacy_revision ?? null]);
+  return JSON.stringify(domains.map(domain => [legacy.get(domain), parts?.get(domain)]));
+}
+
+function workspaceDocument(db, domain) {
+  try {
+    const parts = readWorkspaceParts(db, domain);
+    if (parts) return parts;
+  } catch { /* The committed legacy document still provides a safe fallback. */ }
+  const row = db.prepare('SELECT payload FROM profile_state_documents WHERE domain=? AND length(payload)<=?').get(domain, MAX_STATE_BYTES);
+  return row ? JSON.parse(row.payload) : null;
 }
 
 let lastSelection = null;
-const copySelection = result => result.target
-  ? { ...result, target: { ...result.target, sessions: (result.target.sessions ?? []).map(item => ({ ...item })) } }
-  : { ...result };
+const copyTarget = target => target && { ...target, sessions: target.sessions.map(item => ({ ...item })) };
+const copySelection = result => ({
+  ...result,
+  target: copyTarget(result.target),
+  ...(result.openTargets ? { openTargets: result.openTargets.map(copyTarget) } : {})
+});
 
-/** Reads one committed SQLite snapshot per poll, including live WAL; never writes Orca state. */
-export async function readActiveConversation(options = {}) {
+export async function readOrcaProfile(options = {}) {
   const userDataPath = activeProfileUserData(options);
-  let profileId;
   for (const suffix of ['', '.bak']) {
     try {
       const index = await readSmallJson(path.join(userDataPath, `orca-profile-index.json${suffix}`));
       if (typeof index?.activeProfileId === 'string' && PROFILE_ID.test(index.activeProfileId) && list(index.profiles).some(profile => profile?.id === index.activeProfileId)) {
-        profileId = index.activeProfileId; break;
+        const profileId = index.activeProfileId;
+        return { userDataPath, profileId, stateFile: path.join(userDataPath, 'profiles', profileId, 'profile-state.db') };
       }
     } catch { /* The official resolver also accepts a valid backup index. */ }
   }
-  if (!profileId) return empty('无法识别 Orca 当前配置。');
+  return null;
+}
+
+/** Reads one committed SQLite snapshot per poll, including live WAL; never writes Orca state. */
+export async function readActiveConversation(options = {}) {
+  const profile = await readOrcaProfile(options);
+  if (!profile) return empty('无法识别 Orca 当前配置。');
+  const { userDataPath, profileId, stateFile } = profile;
   let DatabaseSync;
   try { ({ DatabaseSync } = await import('node:sqlite')); }
   catch { return empty('当前运行时不支持 SQLite，无法识别当前对话。'); }
   let db;
   try {
-    db = new DatabaseSync(path.join(userDataPath, 'profiles', profileId, 'profile-state.db'), { readOnly: true, enableExtensionLoading: false });
+    db = new DatabaseSync(stateFile, { readOnly: true, enableExtensionLoading: false });
     db.exec('PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=100;');
     // One read transaction so the stamp, the legacy document and its parts come from the same commit.
     db.exec('BEGIN');
-    const revision = workspaceStamp(db);
-    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform, Boolean(options.includeRemote), revision]);
+    const domains = options.includeOpen ? ['workspaceSession', 'workspaceSessionsByHostId'] : ['workspaceSession'];
+    const revision = workspaceStamp(db, domains);
+    const cacheKey = revision && JSON.stringify([userDataPath, profileId, options.platform || process.platform,
+      Boolean(options.includeRemote), Boolean(options.includeOpen), revision]);
     if (cacheKey && lastSelection?.key === cacheKey) return copySelection(lastSelection.result);
-    let state = null;
-    try { state = readWorkspaceParts(db); }
-    catch { state = null; }
-    if (!state) {
-      const row = db.prepare(`SELECT payload FROM profile_state_documents WHERE domain='workspaceSession' AND length(payload)<=${MAX_STATE_BYTES}`).get();
-      if (!row) return empty('Orca 尚未保存当前工作区状态。');
-      state = JSON.parse(row.payload);
-    }
+    const state = workspaceDocument(db, 'workspaceSession');
+    if (!state) return empty('Orca 尚未保存当前工作区状态。');
     if (!object(state)) return empty('Orca 当前工作区状态无效。');
-    const result = selectActiveConversation(state, { ...options, userDataPath, profileId });
+    const selectionOptions = { ...options, userDataPath, profileId };
+    const result = selectActiveConversation(state, selectionOptions);
+    if (options.includeOpen) {
+      let byHost;
+      try { byHost = workspaceDocument(db, 'workspaceSessionsByHostId'); } catch { /* Older profiles may omit host workspaces. */ }
+      result.openTargets = selectOpenChannels(state, byHost, selectionOptions, result.target);
+    }
     lastSelection = cacheKey ? { key: cacheKey, result: copySelection(result) } : null;
     return result;
   } catch { return empty('暂时无法读取 Orca 当前对话。'); }

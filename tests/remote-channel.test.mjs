@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
-import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { createRemoteChannelReader } from '../src/remote-channel.mjs';
-import { collectRemoteChannel } from '../src/remote-collector.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { createRemoteChannelReader, createRemoteUsageReader } from '../src/remote-channel.mjs';
+import { collectRemoteChannel, collectorCommand } from '../src/remote-collector.mjs';
+import { createUsageIndex, localDayKey } from '../src/usage-summary.mjs';
 
-test('a remote collector merges distinct sessions in the selected workspace and keeps the terminal reusable', async t => {
+test('one SSH stream merges project sessions and receives new records without sending another request', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'tps-remote-test-'));
   const home = path.join(root, 'home');
   const project = path.join(root, 'project');
@@ -31,43 +32,32 @@ test('a remote collector merges distinct sessions in the selected workspace and 
   await writeSession('remote-two', project, 330, '2026-01-01T00:00:03Z');
   await writeSession('other-project', otherProject, 999, '2026-01-01T00:00:04Z');
 
-  const workspace = { id: 'host-workspace', hostId: 'runtime:primary', path: project };
-  const target = { key: 'primary', executionHostId: workspace.hostId, worktreeId: 'worktree', worktreePath: project, sessions: [] };
-  const actions = [];
-  let child, output = '';
+  const target = { key: 'primary', executionHostId: 'runtime:primary', worktreeId: 'worktree', worktreePath: project, sessions: [] };
+  let child, launches = 0, requests = 0;
   const remote = createRemoteChannelReader({
-    host: {
-      has: () => true,
-      async call(method, params) {
-        actions.push(method);
-        if (method === 'workspace.readContext') return { workspaceId: workspace.id };
-        if (method === 'workspace.list') return { workspaces: [workspace] };
-        if (method === 'terminal.create') {
-          assert.equal(params.workspaceId, workspace.id);
-          const command = params.command.split('"')[1];
-          child = spawn(process.execPath, ['--input-type=commonjs', '-e', command], {
-            cwd: project, env: { ...process.env, HOME: home, USERPROFILE: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome },
-            stdio: ['pipe', 'pipe', 'ignore']
-          });
-          child.stdout.setEncoding('utf8');
-          child.stdout.on('data', text => { output += text; });
-          return { terminalId: 'collector-terminal' };
-        }
-        assert.equal(params.terminalId, 'collector-terminal');
-        if (method === 'terminal.read') return { lines: output.split('\n').slice(-params.maxLines) };
-        if (method === 'terminal.sendText') {
-          child.stdin.write(params.text + '\r');
-          return { accepted: true };
-        }
-        if (method === 'terminal.close') {
-          child.stdin.end();
-          await once(child, 'exit');
-          return { closed: true };
-        }
-        assert.fail('Unexpected host method: ' + method);
-      }
+    grantedCapabilities: ['workspace:read'],
+    host: { call: method => assert.fail('Unexpected host method: ' + method) }
+  }, {
+    resolveRuntime: async requested => {
+      assert.equal(requested, target);
+      return { directory: project };
+    },
+    launch(route, token) {
+      assert.equal(route.directory, project);
+      launches++;
+      const command = collectorCommand(token).split('"')[1];
+      child = spawn(process.execPath, ['--input-type=commonjs', '-e', command], {
+        cwd: project, env: { ...process.env, HOME: home, USERPROFILE: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome },
+        stdio: ['pipe', 'pipe', 'ignore']
+      });
+      const write = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (...args) => {
+        requests++;
+        return write(...args);
+      };
+      return child;
     }
-  }, { pollMs: 10, timeoutMs: 10_000 });
+  });
   try {
     remote.setTarget(target);
     const first = await remote.read(target);
@@ -75,22 +65,31 @@ test('a remote collector merges distinct sessions in the selected workspace and 
     assert.deepEqual(first.session.records.map(record => record.outputTokens), [330, 200]);
     assert.deepEqual(first.session.records.map(record => record.tokensPerSecond), [110, 100]);
     assert.doesNotMatch(JSON.stringify(first), /PRIVATE_CHAT_CONTENT|remote-one|remote-two/);
-    const repeated = await remote.read(target, { fresh: true });
-    assert.deepEqual(repeated, first);
-    assert.equal(actions.filter(method => method === 'terminal.create').length, 1);
+    assert.deepEqual(await remote.read(target, { fresh: true }), first);
+    assert.equal(launches, 1);
 
-    const wrongHost = { ...target, key: 'another-host', executionHostId: 'runtime:another' };
-    remote.setTarget(wrongHost);
-    assert.equal((await remote.read(wrongHost)).session, null);
-    assert.equal(actions.filter(method => method === 'terminal.create').length, 1);
+    const sends = requests;
+    const newRows = [
+      { timestamp: '2026-01-01T00:00:04Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'next' } },
+      { timestamp: '2026-01-01T00:00:06Z', type: 'event_msg', payload: { type: 'token_count',
+        info: { last_token_usage: { input_tokens: 100, output_tokens: 500 } } } }
+    ];
+    await appendFile(path.join(logs, 'remote-two.jsonl'), newRows.map(value => JSON.stringify(value)).join('\n') + '\n');
+    let observed;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await delay(100);
+      observed = await remote.read(target);
+      if (observed.session?.records[0]?.outputTokens === 500) break;
+    }
+    assert.deepEqual(observed.session.records.map(record => record.outputTokens), [500, 330, 200]);
+    assert.equal(requests, sends, 'no repeat remote query');
   } finally {
     await remote.dispose();
-    if (child?.exitCode === null) child.kill();
   }
-  assert.equal(actions.filter(method => method === 'terminal.close').length, 1);
+  assert.ok(child.exitCode !== null || child.signalCode !== null, 'closing the project releases the collector');
 });
 
-test('the collector rejects a shell started in the wrong project directory', async t => {
+test('the collector rejects a request for a different project directory', async t => {
   const root = await mkdtemp(path.join(tmpdir(), 'tps-wrong-workspace-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const child = path.join(root, 'separate-workspace');
@@ -102,53 +101,101 @@ test('the collector rejects a shell started in the wrong project directory', asy
   assert.deepEqual(result, { error: 'workspace' });
 });
 
-test('the paired Orca route requires all workspace and terminal grants', async () => {
+test('a denied workspace or unresolved SSH route never starts a process', async () => {
   const target = { key: 'remote', executionHostId: 'runtime:paired', worktreeId: 'target' };
   let lookups = 0;
-  const host = {
-    has: () => true,
-    async call(method) {
-      if (method === 'workspace.readContext') return { workspaceId: 'local' };
-      if (method === 'workspace.list') return { workspaces: [] };
-      assert.fail('An unverified worktree must not create a terminal');
-    }
-  };
-  async function resolveRuntime(requested) {
-    assert.equal(requested, target);
-    lookups++;
-    return {};
-  }
-  for (const grantedCapabilities of [
-    ['workspace:read', 'terminal:read'],
-    ['workspace:read', 'terminal:read', 'terminal:send']
-  ]) {
-    const remote = createRemoteChannelReader({ host, grantedCapabilities }, { resolveRuntime });
+  for (const grantedCapabilities of [[], ['workspace:read']]) {
+    const remote = createRemoteChannelReader({ grantedCapabilities }, {
+      async resolveRuntime() {
+        lookups++;
+        return null;
+      },
+      launch() { assert.fail('An unverified workspace must not start SSH'); }
+    });
     remote.setTarget(target);
-    assert.equal((await remote.read(target)).session, null);
+    const result = await remote.read(target);
+    assert.equal(result.session, null);
+    assert.match(result.warnings[0], grantedCapabilities.length ? /工作区同步/ : /授权/);
     await remote.dispose();
   }
   assert.equal(lookups, 1);
 });
 
-test('the paired route handles an unavailable native runtime without bypassing permission errors', async () => {
+test('closing a project during route lookup prevents a late SSH startup', async () => {
   const target = { key: 'remote', executionHostId: 'runtime:paired', worktreeId: 'target' };
-  let lookups = 0;
-  for (const code of ['runtime_unavailable', 'not_permitted']) {
-    const remote = createRemoteChannelReader({
-      grantedCapabilities: ['workspace:read', 'terminal:read', 'terminal:send'],
-      host: {
-        has: () => true,
-        async call(method) {
-          if (method === 'workspace.readContext') return null;
-          throw Object.assign(new Error(code), { code });
-        }
-      }
-    }, { async resolveRuntime() { lookups++; return {}; } });
-    remote.setTarget(target);
-    const result = await remote.read(target);
-    assert.equal(result.session, null);
-    assert.match(result.warnings[0], code === 'not_permitted' ? /授权/ : /工作区同步/);
-    await remote.dispose();
+  let resolveRoute;
+  const pending = new Promise(resolve => { resolveRoute = resolve; });
+  const remote = createRemoteChannelReader({ grantedCapabilities: ['workspace:read'] }, {
+    resolveRuntime: () => pending,
+    launch() { assert.fail('A closed project must not start SSH'); }
+  });
+  remote.setTarget(target);
+  const result = remote.read(target);
+  await remote.dispose();
+  resolveRoute({ directory: '/project' });
+  assert.equal((await result).session, null);
+});
+
+test('remote usage counts the full history once per host and keeps totals when it disconnects', async t => {
+  const home = await mkdtemp(path.join(tmpdir(), 'tps-remote-usage-'));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const codexHome = path.join(home, '.codex'), logs = path.join(codexHome, 'sessions');
+  await mkdir(logs, { recursive: true });
+  const sessions = 202, completed = new Date(), started = new Date(completed.getTime() - 1_000);
+  await Promise.all(Array.from({ length: sessions }, (_, index) => {
+    const sessionId = 'usage-' + index;
+    const rows = [
+      { type: 'session_meta', payload: { id: sessionId, cwd: home } },
+      { timestamp: started, type: 'event_msg', payload: { type: 'task_started', turn_id: sessionId } },
+      { timestamp: completed, type: 'event_msg', payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 2, output_tokens: 3 } } } }
+    ];
+    return writeFile(path.join(logs, sessionId + '.jsonl'), rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  }));
+  const host = { host: 'example.test', username: 'example', port: 22 };
+  let online = true, launches = 0, writes = 0;
+  const reader = createRemoteUsageReader({ grantedCapabilities: ['workspace:read'] }, {
+    resolveHosts: async () => online ? [host, { ...host, alias: 'duplicate' }] : [],
+    launch(_route, token) {
+      launches++;
+      const child = spawn(process.execPath, ['--input-type=commonjs', '-e', collectorCommand(token).split('"')[1]], {
+        cwd: home, stdio: ['pipe', 'pipe', 'ignore'],
+        env: { ...process.env, HOME: home, USERPROFILE: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome,
+          CLAUDE_CONFIG_DIR: path.join(home, '.claude'), PI_CODING_AGENT_DIR: path.join(home, '.pi'),
+          XDG_DATA_HOME: path.join(home, 'data'), OPENCODE_DB: ':memory:' }
+      });
+      const write = child.stdin.write.bind(child.stdin);
+      child.stdin.write = (...args) => { writes++; return write(...args); };
+      return child;
+    }
+  });
+  const stored = new Map(), day = localDayKey(completed.getTime());
+  const local = { key: 'local-unit', stamp: 'same', bytes: 5, mtimeMs: completed.getTime(),
+    read: async () => ({ [day]: { claude: { 'local-model': [1, 2, 1, 0, 0, 0, 0, 0] } } }) };
+  const index = createUsageIndex({
+    now: () => completed.getTime(),
+    storage: { keys: async () => [...stored.keys()], get: async key => stored.get(key),
+      set: async (key, value) => stored.set(key, value), delete: async key => stored.delete(key) },
+    async discover(cutoffMs) {
+      const remote = await reader.discover(cutoffMs);
+      return { ...remote, descriptors: [local, ...remote.descriptors] };
+    }
+  });
+  async function refresh() {
+    try { assert.deepEqual(await index.refresh(), { pending: 0 }); }
+    finally { await reader.finish(); }
   }
-  assert.equal(lookups, 1);
+  try {
+    await refresh();
+    assert.equal(index.summary().windows.today.requests, sessions + 1);
+    assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
+    assert.equal(launches, 1);
+    const initialWrites = writes;
+    await refresh();
+    assert.equal(writes - initialWrites, 2, 'only the two descriptor pages are read again');
+    online = false;
+    await refresh();
+    assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
+  } finally {
+    await reader.dispose();
+  }
 });

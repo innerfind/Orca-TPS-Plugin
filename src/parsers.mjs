@@ -167,7 +167,7 @@ function codexTokenSignature(info) {
 
 /** Incremental Codex parser: feed row batches in order, then finish. Same results as one call with all rows. */
 export function createCodexParser(sessionId, { truncated = false, limit = 100 } = {}) {
-  const results = [];
+  let results = [];
   const lastSignatureBySource = new Map();
   let previousTokenSignature = null;
   let totalHighWater = null;
@@ -394,22 +394,17 @@ export function createCodexParser(sessionId, { truncated = false, limit = 100 } 
       model: currentModel
     }));
   }
+  if (results.length > limit * 2) results = recentRecords(results, limit);
   };
   return { feed, finish: () => recentRecords(results, limit) };
 }
 
-function parseCodex(rows, sessionId, options = {}) {
-  const parser = createCodexParser(sessionId, options);
-  parser.feed(rows);
-  return parser.finish();
-}
-
-function parseClaude(rows, { isSubagent = false, limit = 100 } = {}) {
+function createClaudeParser({ isSubagent = false, limit = 100 } = {}) {
   const chain = new Map();
   const messages = new Map();
   const timings = new Map();
 
-  for (const row of rows) {
+  function addRow(row) {
     const uuid = name(row.uuid);
     const atRaw = time(row.timestamp), at = Number.isFinite(atRaw) ? atRaw : null;
     if (uuid) {
@@ -419,11 +414,11 @@ function parseClaude(rows, { isSubagent = false, limit = 100 } = {}) {
         isAttachment: row.type === 'attachment'
       });
     }
-    if (row.type !== 'assistant') continue;
+    if (row.type !== 'assistant') return;
     const message = record(row.message);
-    if (!message) continue;
+    if (!message) return;
     const msgId = name(message.id) ?? uuid;
-    if (!msgId) continue;
+    if (!msgId) return;
 
     const usage = record(message.usage);
     const inputTokens = count(usage?.input_tokens) ?? 0;
@@ -486,12 +481,11 @@ function parseClaude(rows, { isSubagent = false, limit = 100 } = {}) {
     return null;
   };
 
-  const results = [];
-  for (const [msgId, msg] of messages) {
-    if (msg.inputTokens === 0 && msg.outputTokens === 0 && msg.cacheReadTokens === 0 && msg.cacheCreationTokens === 0) continue;
+  function buildMessage(msgId, msg) {
+    if (msg.inputTokens === 0 && msg.outputTokens === 0 && msg.cacheReadTokens === 0 && msg.cacheCreationTokens === 0) return null;
     const timing = timings.get(msgId);
     const endMs = timing && Number.isFinite(timing.endMs) ? timing.endMs : msg.timestampMs;
-    if (!Number.isFinite(endMs)) continue;
+    if (!Number.isFinite(endMs)) return null;
     let latencyMs = null, firstTokenMs = null;
     if (msg.stopReason !== null && timing?.startsAtFirstBlock && Number.isFinite(timing.endMs)) {
       const startMs = resolveRequestStartMs(timing.firstParent);
@@ -502,7 +496,7 @@ function parseClaude(rows, { isSubagent = false, limit = 100 } = {}) {
         }
       }
     }
-    results.push(buildRecord({
+    return buildRecord({
       id: `session:${msgId}`,
       rawId: msgId,
       completedAt: endMs,
@@ -517,9 +511,12 @@ function parseClaude(rows, { isSubagent = false, limit = 100 } = {}) {
       firstTokenMs,
       model: msg.model,
       isSubagent: msg.isSubagent
-    }));
+    });
   }
-  return recentRecords(results, limit);
+  return {
+    feed(rows) { for (const row of rows) addRow(row); },
+    finish() { return recentRecords(Array.from(messages, ([id, message]) => buildMessage(id, message)), limit); }
+  };
 }
 
 function piTimestampMs(value) {
@@ -548,22 +545,23 @@ function extractPiTokens(usageObj) {
     ? { input, output, cacheRead, cacheWrite } : null;
 }
 
-function parsePi(rows, { limit = 100 } = {}) {
-  const results = [];
+function createPiParser({ limit = 100 } = {}) {
+  let results = [];
   let currentModel = null;
+  let rowIndex = 0;
 
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
+  function addRow(row) {
+    const i = rowIndex++;
     if (row.type === 'model_change') {
       currentModel = name(row.modelId) ?? name(row.model) ?? currentModel;
-      continue;
+      return;
     }
     const entryId = name(row.id) ?? `line-${i}`;
     const entryAt = piTimestampMs(row.timestamp);
 
     if (row.type === 'compaction' || row.type === 'branch_summary' || row.type === 'model_usage') {
       const tokens = extractPiTokens(row.usage);
-      if (!tokens || !Number.isFinite(entryAt)) continue;
+      if (!tokens || !Number.isFinite(entryAt)) return;
       const latencyMs = row.type === 'model_usage' && typeof row.duration === 'number' && Number.isFinite(row.duration) && row.duration > 0
         ? estimatedLatencyMs(0, Math.round(row.duration)) : null;
       results.push(buildRecord({
@@ -579,12 +577,12 @@ function parsePi(rows, { limit = 100 } = {}) {
         durationMs: latencyMs,
         model: name(row.model) ?? name(row.modelId) ?? currentModel
       }));
-      continue;
+      return;
     }
 
-    if (row.type !== 'message') continue;
+    if (row.type !== 'message') return;
     const message = record(row.message);
-    if (!message) continue;
+    if (!message) return;
 
     if (message.role === 'toolResult' && message.toolName === 'subagent' && !record(message.usage)) {
       const details = record(message.details ?? row.details);
@@ -637,16 +635,16 @@ function parsePi(rows, { limit = 100 } = {}) {
             }
           }
         });
-        continue;
+        return;
       }
     }
 
-    if (message.role !== 'assistant' && message.role !== 'toolResult') continue;
+    if (message.role !== 'assistant' && message.role !== 'toolResult') return;
     const tokens = extractPiTokens(message.usage);
-    if (!tokens) continue;
+    if (!tokens) return;
     const msgAt = piTimestampMs(message.timestamp);
     const completedAt = Number.isFinite(entryAt) ? entryAt : msgAt;
-    if (!Number.isFinite(completedAt)) continue;
+    if (!Number.isFinite(completedAt)) return;
 
     let latencyMs = null;
     if (message.role === 'assistant') {
@@ -670,7 +668,13 @@ function parsePi(rows, { limit = 100 } = {}) {
       model: name(message.model) ?? currentModel
     }));
   }
-  return recentRecords(results, limit);
+  return {
+    feed(rows) {
+      for (const row of rows) addRow(row);
+      if (results.length > limit * 2) results = recentRecords(results, limit);
+    },
+    finish: () => recentRecords(results, limit)
+  };
 }
 
 const ANTIGRAVITY_TRANSCRIPT_TAIL = ['.system_generated', 'logs', 'transcript.jsonl'];
@@ -730,6 +734,13 @@ const protoText = (fields, number) => {
   const bytes = protoBytes(fields, number);
   return bytes ? new TextDecoder().decode(bytes) : null;
 };
+
+/** Workspace root and initial working directory from the native trajectory metadata. */
+export function antigravityWorkspacePaths(metadata) {
+  const fields = protoFields(metadata);
+  return [protoText(protoFields(protoBytes(fields, 1)), 1), protoText(fields, 7)].filter(Boolean);
+}
+
 // google.protobuf.Timestamp and Duration share the seconds + nanos layout. proto3 omits zero values,
 // so a present message with no seconds field means zero seconds (a sub-second duration).
 function protoSecondsMs(bytes) {
@@ -817,44 +828,52 @@ export function antigravityNativeTimings(steps, generations) {
  * duration only comes from the native store. Without that store a row keeps its token and cache counters only.
  * Message bodies (content, thinking, tool arguments) are never read.
  */
-function parseAntigravityTranscript(rows, native = new Map(), { limit = 100 } = {}) {
-  const results = [];
+function createAntigravityParser({ limit = 100 } = {}) {
+  const steps = [];
   let selectedModel = null;
-  for (const row of rows) {
+
+  function addRow(row) {
     if (typeof row.content === 'string' && row.content.includes('Model Selection')) {
       selectedModel = modelSelectionFrom(row.content) ?? selectedModel;
     }
     const stepIndex = count(row.step_index);
     const inputTokens = count(row.input_tokens), outputTokens = count(row.output_tokens), cacheReadTokens = count(row.cache_read_tokens);
-    if (stepIndex === null || (inputTokens === null && outputTokens === null && cacheReadTokens === null)) continue;
+    if (stepIndex === null || (inputTokens === null && outputTokens === null && cacheReadTokens === null)) return;
+    steps.push([stepIndex, { inputTokens, outputTokens, cacheReadTokens, selectedModel, createdAt: time(row.created_at) }]);
+  }
+
+  function buildStep(stepIndex, step, native) {
     const timing = native.get(stepIndex) ?? null;
     // Model priority: the generation's own display name, then the latest selection, then the bare family name.
-    const model = timing?.model ?? selectedModel ?? timing?.baseModel ?? null;
+    const model = timing?.model ?? step.selectedModel ?? timing?.baseModel ?? null;
     const hasLatency = timing?.latencyMs != null;
-    const entry = buildRecord({
+    return buildRecord({
       id: `antigravity_session:${stepIndex}`,
       rawId: String(stepIndex),
-      completedAt: hasLatency ? timing.createdMs + timing.latencyMs : time(row.created_at),
+      completedAt: hasLatency ? timing.createdMs + timing.latencyMs : step.createdAt,
       ...(timing ? { createdAtSec: Math.floor(timing.createdMs / 1000) } : {}),
       dataSource: 'antigravity_session',
-      inputTokens: inputTokens ?? 0,
-      cacheReadTokens: cacheReadTokens ?? 0,
+      inputTokens: step.inputTokens ?? 0,
+      cacheReadTokens: step.cacheReadTokens ?? 0,
       cacheCreationTokens: 0,
       cacheInclusive: false,
-      outputTokens: outputTokens ?? 0,
+      outputTokens: step.outputTokens ?? 0,
       durationMs: hasLatency ? timing.latencyMs : null,
       firstTokenMs: timing?.firstTokenMs ?? null,
       model
     });
-    if (entry) results.push(entry);
   }
-  return recentRecords(results, limit);
+  return {
+    feed(rows) { for (const row of rows) addRow(row); },
+    finish(native = new Map()) {
+      return recentRecords(steps.map(([id, step]) => buildStep(id, step, native)), limit);
+    }
+  };
 }
 
-/** Returns metadata and counters only. Chat content never leaves this parser. */
-export function parseJsonl(text, provider, headerText = '', options = {}) {
-  const parse = value => value.split('\n').map(json).filter(Boolean);
-  const rows = parse(text), headers = headerText ? parse(headerText) : rows;
+const jsonlRows = text => text.split('\n').map(json).filter(Boolean);
+
+function jsonlMetadata(headers, provider, options = {}) {
   let sessionId = null, cwd = null;
   for (const row of headers.slice(0, 30)) {
     if (provider === 'codex' && row.type === 'session_meta') {
@@ -867,16 +886,36 @@ export function parseJsonl(text, provider, headerText = '', options = {}) {
   }
   // Antigravity transcripts have no header; the conversation id comes from the directory path.
   if (provider === 'antigravity') sessionId = name(options.sessionId);
-  const records = provider === 'codex'
-    ? parseCodex(rows, sessionId, options)
-    : provider === 'claude'
-      ? parseClaude(rows, options)
-      : provider === 'pi'
-        ? parsePi(rows, options)
-        : provider === 'antigravity'
-          ? parseAntigravityTranscript(rows, options.native, options)
-          : [];
-  return { sessionId, cwd, records };
+  return { sessionId, cwd };
+}
+
+export function readJsonlMetadata(text, provider) {
+  return jsonlMetadata(jsonlRows(text), provider);
+}
+
+/** Keep parser context between complete batches without retaining their message bodies. */
+export function createJsonlCursor(text, provider, headerText = '', options = {}) {
+  const rows = jsonlRows(text);
+  const metadata = jsonlMetadata(headerText ? jsonlRows(headerText) : rows, provider, options);
+  const parsers = {
+    codex: () => createCodexParser(metadata.sessionId, options),
+    claude: () => createClaudeParser(options),
+    pi: () => createPiParser(options),
+    antigravity: () => createAntigravityParser(options)
+  };
+  const parser = Object.hasOwn(parsers, provider) ? parsers[provider]() : null;
+  parser?.feed(rows);
+  return {
+    ...metadata,
+    feed: text => parser?.feed(jsonlRows(text)),
+    finish: native => parser?.finish(native) ?? []
+  };
+}
+
+/** Returns metadata and counters only. Chat content never leaves this parser. */
+export function parseJsonl(text, provider, headerText = '', options = {}) {
+  const cursor = createJsonlCursor(text, provider, headerText, options);
+  return { sessionId: cursor.sessionId, cwd: cursor.cwd, records: cursor.finish(options.native) };
 }
 
 /** Rows are provider message records in storage order, already limited to one session. */
