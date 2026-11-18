@@ -23,6 +23,7 @@ Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-t
 - **Tool Execution Time Excluded**: Measures individual API call durations instead of whole-turn wall-clock time, so local builds, test suites, shell commands, and approval dialogs never distort model generation speed.
 - **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, **Pi Agent**, and **Antigravity CLI**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
 - **Usage Totals & Heatmap**: A panel at the top shows today, the last 7 days and the last 30 days, plus a GitHub-style heatmap of the last year. Totals cover Claude Code, Codex, OpenCode, Pi and Antigravity CLI: total tokens (new input, output, cache writes and cache reads, matching CC Switch's real total), cache hit rate, request counts, and a per-agent and per-model breakdown. A **model average speed** ranking (mean tokens/s per model, from local session logs) sits in the same group. Counted locally in the background; only counts are stored, never message text.
+- **Battle Leaderboard (战况天梯, opt-in)**: A separate panel ranks users by daily / calendar-month / calendar-year token totals (Top 100 with your own rank, even outside the Top 100). Synchronization is **off by default**; joining is an explicit action. Only per-day aggregated counters leave your machine — never prompts, replies, project names, paths or session IDs. Requires a leaderboard server (see below); without one the panel still shows your local totals.
 - **Read-Only Session Data**: The parser reads agent transcripts and databases without modifying them. Remote projects send statistics back over the Orca connection, and conversation text stays with the parser.
 
 ---
@@ -118,6 +119,60 @@ The plugin reads the exact transcript/database path recorded by Orca for the foc
 
 ---
 
+## Battle Leaderboard (战况天梯)
+
+The **战况天梯** panel compares token usage across users. It has two halves:
+
+- **Local totals (always available)**: today, this calendar month and this calendar year totals for this machine plus every authorized remote host, in both **含缓存总量** (real total) and **净输入+输出** (net) views.
+- **Ranked leaderboard (needs a server)**: Top 100 plus your own exact rank, percentile, and the gap to the player above and to the Top 100. Ranked periods are the **current calendar day / month / year**, so a new board opens at midnight, on the 1st, and on January 1st.
+
+> **Enabling the ranked board requires running (or pointing at) a leaderboard server.** The plugin never ships a public endpoint. Set the address in the panel's 设置 section, or under Orca → Settings → Plugins.
+
+### Running the bundled server
+
+The repository includes a zero-dependency server (`server/leaderboard-server.mjs`, Node.js ≥ 22.13, built-in `node:sqlite`):
+
+```sh
+# Local test with 115 seeded demo players
+node server/leaderboard-server.mjs --seed-demo
+
+# Production-ish: bind explicitly and choose the database file
+node server/leaderboard-server.mjs --host 0.0.0.0 --port 8787 --db /var/lib/orca-tps/leaderboard.db
+```
+
+| Flag / Env | Purpose |
+| :--- | :--- |
+| `--host` / `LEADERBOARD_HOST` | Bind address (default `127.0.0.1`) |
+| `--port` / `LEADERBOARD_PORT` | Port (default `8787`) |
+| `--db` / `LEADERBOARD_DB` | SQLite file (default `~/.orca-tps-leaderboard/leaderboard.db`) |
+| `--seed-demo` | Insert 115 demo players once, useful for testing rank positions |
+| `GITHUB_CLIENT_ID` | Enables GitHub OAuth Device Flow sign-in. Without it the panel offers anonymous join only. |
+
+Put HTTPS in front of it (Caddy, Nginx, or a tunnel) before sharing it with other people: the plugin stores its bearer token in Orca's encrypted `secrets:own` store, and the panel refuses non-`http(s)` URLs.
+
+### Joining and identity
+
+- **Anonymous join** issues a `ORCA-XXXXXXXXXXXX` recovery code. Keep it: entering it on another machine restores the same leaderboard account.
+- **GitHub login** (when the server sets `GITHUB_CLIENT_ID`) uses the OAuth Device Flow. The browser page is opened through Orca's own `shell.openExternal`, and the access token never reaches the panel.
+- Orca's own login ID is **not** used as identity. The plugin host API exposes no account or profile identifiers, and local Orca profiles are anonymous (`local-default`) unless the user signed into Orca Cloud. Guessing identity from disk would be both unreliable and unauthenticated, so the leaderboard authenticates with its own token.
+
+### What is uploaded
+
+Per `(source scope, local day)` only: `realTokens`, `netTokens`, `requests`. Source scopes are opaque hashes:
+
+- `local:<hash>` — one per installed desktop, generated locally.
+- `remote:<hash>` — one per SSH endpoint (`host + port + username`), already used by remote collection.
+
+Because the server upserts on `(user, sourceScope, day)`, several desktops scanning the same remote server count it **once** rather than once per desktop. A user's rank is the sum over their scopes, so a second machine adds to the total instead of overwriting it.
+
+### Privacy controls
+
+- Synchronization is **off** until you join and enable it.
+- **隐身模式** hides your name and avatar from the public board; only your own panel shows your rank.
+- Leaving the leaderboard deletes the stored token and stops all uploads.
+
+---
+
 ## Repository Structure
 
 ```text
@@ -130,8 +185,13 @@ Orca-TPS-Plugin/
 │   ├── data.mjs              # Bounded JSONL reader, read-only SQLite, subagent & proxy merger
 │   ├── data-paths.mjs        # Cross-platform Linux / Windows / macOS path resolution
 │   ├── parsers.mjs           # CC Switch-aligned per-request parser & speed/cache formulas
-│   └── panel.html            # Responsive sidebar HTML panel with light/dark theming
-├── tests/                    # 51 unit and SQLite integration tests
+│   ├── usage-summary.mjs     # Bucketed incremental usage index (day/month/year + leaderboard scopes)
+│   ├── leaderboard.mjs       # Opt-in leaderboard client: auth, sanitized sync, cached boards
+│   ├── panel.html            # Responsive sidebar HTML panel with light/dark theming
+│   └── ladder.html           # 战况天梯 panel: local totals, Top 100, my rank
+├── server/
+│   └── leaderboard-server.mjs # Zero-dependency leaderboard server (node:http + node:sqlite)
+├── tests/                    # Unit, SQLite integration and leaderboard end-to-end tests
 ├── .github/workflows/ci.yml  # Automated CI matrix for Ubuntu and Windows
 ├── install-linux.sh          # Linux validation & loader script
 ├── install-windows.ps1       # Windows PowerShell validation & loader script

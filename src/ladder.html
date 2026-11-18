@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>战况天梯</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --page: #f2f2f7;
+      --surface: #ffffff;
+      --ink: #1c1c1e;
+      --muted: #6d6d75;
+      --line: #e5e5ea;
+      --purple: #8f32d6;
+      --blue: #0066e6;
+      --orange: #b45300;
+      --green: #007f48;
+      --cache: #9c6500;
+      --gold: #b77900;
+      --silver: #5e6673;
+      --bronze: #a0522d;
+      --tag-bg: #ededf2;
+      --button-bg: #e5f0ff;
+      --self-bg: #eef5ff;
+      --self-line: #93c0ff;
+      --warning-bg: #fff1dc;
+      --error: #c8213a;
+      --error-bg: #fff0f3;
+      --shadow: 0 3px 12px rgb(39 43 72 / 3%);
+    }
+    html.dark {
+      color-scheme: dark;
+      --page: #161618;
+      --surface: #262628;
+      --ink: #f5f5f7;
+      --muted: #b4b4be;
+      --line: #3a3a3e;
+      --purple: #d38aff;
+      --blue: #64b0ff;
+      --orange: #ffb340;
+      --green: #4ade80;
+      --cache: #e8b65b;
+      --gold: #ffd166;
+      --silver: #c7d0dd;
+      --bronze: #e09f7d;
+      --tag-bg: #343439;
+      --button-bg: #163552;
+      --self-bg: #172a42;
+      --self-line: #3b7dd8;
+      --warning-bg: #46321b;
+      --error: #ff8fa5;
+      --error-bg: #49232d;
+      --shadow: 0 3px 12px rgb(0 0 0 / 6%);
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { min-width: 0; min-height: 100%; background: var(--page); }
+    body {
+      margin: 0;
+      min-width: 0;
+      padding: 16px;
+      color: var(--ink);
+      background: var(--page);
+      font-family: ui-rounded, "SF Pro Rounded", -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji";
+      font-size: 13px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .heading { min-width: 0; }
+    h1 { margin: 0; font-size: 18px; line-height: 1.4; letter-spacing: -.3px; font-weight: 750; }
+    .summary { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .header-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+      min-height: 32px; padding: 6px 10px; border: 0; border-radius: 12px;
+      background: var(--button-bg); color: var(--blue); font-size: 12px; font-weight: 650; cursor: pointer;
+    }
+    .btn-ghost { background: var(--tag-bg); color: var(--ink); }
+    .btn-sm { min-height: 28px; padding: 4px 9px; border-radius: 10px; font-size: 11px; }
+    .btn svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .btn:hover:not(:disabled) { filter: brightness(.96); }
+    .btn:active:not(:disabled) { transform: translateY(1px); }
+    .btn:disabled { cursor: default; opacity: .6; }
+    .btn:focus-visible, input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .btn.is-busy svg { animation: spin 1s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .card {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .message { margin-top: 10px; padding: 10px 12px; border-radius: 14px; overflow-wrap: anywhere; font-size: 12px; }
+    .message-error { color: var(--error); background: var(--error-bg); }
+    .message-warning { color: var(--orange); background: var(--warning-bg); }
+
+    .war-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; margin-top: 12px; padding: 3px; border-radius: 999px; background: var(--tag-bg); }
+    .war-tab { min-width: 0; padding: 5px 4px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; }
+    .war-tab[aria-selected="true"] { background: var(--surface); color: var(--blue); box-shadow: var(--shadow); }
+
+    .sub-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+    .metric-switch { display: inline-flex; gap: 2px; padding: 2px; border-radius: 999px; background: var(--tag-bg); }
+    .metric-pill { border: 0; border-radius: 999px; padding: 3px 8px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 600; cursor: pointer; }
+    .metric-pill[aria-pressed="true"] { background: var(--surface); color: var(--blue); box-shadow: var(--shadow); }
+    .period-key { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+
+    .me-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .me-title { font-size: 12px; font-weight: 700; }
+    .me-rank-pill { padding: 2px 9px; border-radius: 999px; background: var(--button-bg); color: var(--blue); font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; }
+    .me-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+    .stat-label { display: block; color: var(--muted); font-size: 11px; }
+    .stat-val { display: block; margin-top: 2px; font-size: 20px; line-height: 1.2; font-weight: 750; color: var(--blue); font-variant-numeric: tabular-nums; }
+    .stat-val.green { color: var(--green); }
+    .stat-sub { margin-top: 2px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .me-meta { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+    .me-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+    .field-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+    .field-input {
+      min-width: 0; flex: 1; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px;
+      background: var(--page); color: var(--ink); font-size: 12px;
+    }
+    .check-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; cursor: pointer; }
+    .muted-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+
+    .device-box { margin-top: 10px; padding: 10px; border-radius: 12px; background: var(--page); border: 1px dashed var(--blue); }
+    .device-code { display: inline-block; margin: 4px 0; padding: 4px 10px; border-radius: 8px; background: var(--surface); font-size: 16px; font-weight: 750; letter-spacing: 1.5px; color: var(--blue); font-variant-numeric: tabular-nums; }
+
+    .board-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .board-title { font-size: 12px; font-weight: 700; }
+    .board-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .board-list { margin: 8px 0 0; padding: 0; list-style: none; }
+    .board-row { padding: 8px 6px; border-top: 1px solid var(--line); border-radius: 10px; }
+    .board-row:first-child { border-top: 0; }
+    .board-row.is-self { background: var(--self-bg); border: 1px solid var(--self-line); margin: 3px 0; padding: 8px; }
+    .board-row-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .rank-num { flex-shrink: 0; min-width: 24px; text-align: center; font-size: 12px; font-weight: 750; font-variant-numeric: tabular-nums; color: var(--muted); }
+    .rank-num.top1 { color: var(--gold); font-size: 14px; }
+    .rank-num.top2 { color: var(--silver); font-size: 13px; }
+    .rank-num.top3 { color: var(--bronze); font-size: 13px; }
+    .avatar { width: 22px; height: 22px; border-radius: 999px; flex-shrink: 0; object-fit: cover; background: var(--tag-bg); display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--blue); }
+    .player-name { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .self-tag { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; }
+    .score-col { flex-shrink: 0; text-align: right; font-variant-numeric: tabular-nums; }
+    .score-main { display: block; font-size: 12px; font-weight: 700; color: var(--blue); }
+    .score-sub { display: block; font-size: 10px; color: var(--muted); }
+    .bar-track { height: 3px; margin-top: 5px; border-radius: 2px; background: var(--tag-bg); overflow: hidden; }
+    .bar-fill { height: 100%; border-radius: 2px; background: var(--blue); }
+    .board-empty { margin: 14px 2px 6px; color: var(--muted); font-size: 12px; text-align: center; }
+
+    .footer { margin: 14px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.7; }
+    .footer p { margin: 0; }
+    @media (prefers-reduced-motion: reduce) {
+      .btn.is-busy svg { animation: none; }
+      .btn:active:not(:disabled) { transform: none; }
+    }
+  </style>
+</head>
+<body>
+  <main id="ladder-panel" aria-label="战况天梯">
+    <header class="panel-header">
+      <div class="heading">
+        <h1>战况天梯</h1>
+        <p class="summary" id="subtitle">当日 · 本月 · 本年 Token 排行前 100</p>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-ghost btn-sm" id="toggle-settings" type="button" aria-expanded="false">设置</button>
+        <button class="btn" id="refresh" type="button" aria-label="刷新天梯">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
+          <span>刷新</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="message message-error" id="error" role="alert" hidden></div>
+    <div class="message message-warning" id="notice" role="status" hidden></div>
+
+    <section class="card" id="settings-card" aria-label="天梯服务与隐私设置" hidden>
+      <div class="me-head">
+        <span class="me-title">天梯连接与隐私设置</span>
+        <button class="btn btn-ghost btn-sm" id="close-settings" type="button">收起</button>
+      </div>
+      <div class="field-row">
+        <input class="field-input" id="server-url" type="url" placeholder="http://127.0.0.1:8787" aria-label="天梯服务端地址">
+        <button class="btn btn-sm" id="save-server" type="button">保存</button>
+      </div>
+      <label class="check-row">
+        <input type="checkbox" id="opt-sync">
+        <span>同步我的每日聚合 Token 计数到天梯（默认关闭）</span>
+      </label>
+      <label class="check-row">
+        <input type="checkbox" id="opt-anon">
+        <span>隐身模式（榜单中隐藏我的昵称与头像，仅自己可见）</span>
+      </label>
+      <div id="profile-editor" hidden>
+        <div class="field-row">
+          <input class="field-input" id="edit-name" type="text" maxlength="40" placeholder="修改榜单昵称" aria-label="修改榜单昵称">
+          <button class="btn btn-sm" id="save-name" type="button">改名</button>
+        </div>
+        <div class="me-actions">
+          <button class="btn btn-ghost btn-sm" id="copy-claim" type="button" hidden>复制恢复码</button>
+          <button class="btn btn-ghost btn-sm" id="logout" type="button">退出天梯</button>
+        </div>
+      </div>
+      <p class="muted-note">只上传各设备/远程主机每日汇总后的数字计数，绝不上传对话内容、提示词、项目名或本地路径。</p>
+    </section>
+
+    <div class="war-tabs" role="tablist" aria-label="天梯周期">
+      <button class="war-tab" type="button" role="tab" data-period="day" aria-selected="true">当日战况</button>
+      <button class="war-tab" type="button" role="tab" data-period="month" aria-selected="false">本月战况</button>
+      <button class="war-tab" type="button" role="tab" data-period="year" aria-selected="false">本年战况</button>
+    </div>
+
+    <div class="sub-bar">
+      <div class="metric-switch" role="group" aria-label="排行口径">
+        <button class="metric-pill" type="button" data-metric="real" aria-pressed="true">含缓存总量</button>
+        <button class="metric-pill" type="button" data-metric="net" aria-pressed="false">净输入+输出</button>
+      </div>
+      <span class="period-key" id="period-key">—</span>
+    </div>
+
+    <section class="card" id="me-card" aria-label="我的排名与本地战况">
+      <div class="me-head">
+        <span class="me-title" id="me-title">我的战况</span>
+        <span class="me-rank-pill" id="me-rank">未参与</span>
+      </div>
+      <div class="me-grid">
+        <div>
+          <span class="stat-label" id="me-score-label">本机周期 Token（含缓存）</span>
+          <strong class="stat-val" id="me-score">—</strong>
+          <span class="stat-sub" id="me-alt-score">净消耗 —</span>
+        </div>
+        <div>
+          <span class="stat-label">请求次数</span>
+          <strong class="stat-val green" id="me-requests">—</strong>
+          <span class="stat-sub" id="me-gap">登录后查看名次</span>
+        </div>
+      </div>
+
+      <div id="auth-box" hidden>
+        <div class="field-row">
+          <input class="field-input" id="join-name" type="text" maxlength="40" placeholder="榜单昵称（可选）" aria-label="榜单昵称">
+        </div>
+        <div class="me-actions">
+          <button class="btn btn-sm" id="join-anon" type="button">匿名加入排行</button>
+          <button class="btn btn-ghost btn-sm" id="join-github" type="button">GitHub 登录</button>
+          <button class="btn btn-ghost btn-sm" id="toggle-claim" type="button">恢复码找回</button>
+        </div>
+        <div class="field-row" id="claim-box" hidden>
+          <input class="field-input" id="claim-input" type="text" maxlength="64" placeholder="输入 ORCA-XXXXXX 恢复码" aria-label="输入恢复码">
+          <button class="btn btn-sm" id="claim-submit" type="button">恢复</button>
+        </div>
+        <div class="device-box" id="github-box" hidden>
+          <div>请在浏览器中打开 GitHub 设备验证页并输入验证码：</div>
+          <div class="device-code" id="github-code">—</div>
+          <div class="me-actions">
+            <button class="btn btn-sm" id="github-open" type="button">打开 GitHub 授权页</button>
+            <button class="btn btn-ghost btn-sm" id="github-copy" type="button">复制验证码</button>
+            <button class="btn btn-ghost btn-sm" id="github-cancel" type="button">取消</button>
+          </div>
+        </div>
+        <p class="muted-note">默认不上传任何数据；点击加入即同意上传按日脱敏汇总的 Token 计数。</p>
+      </div>
+
+      <div class="me-meta" id="me-footer" hidden>
+        <span id="me-sync-info">尚未同步</span>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-ghost btn-sm" id="locate-me" type="button" hidden>定位我</button>
+          <button class="btn btn-sm" id="sync-now" type="button">立即同步</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" id="board-card" aria-label="前 100 名排行榜">
+      <div class="board-head">
+        <span class="board-title">Top 100 战况天梯</span>
+        <span class="board-count" id="board-count">共 — 人</span>
+      </div>
+      <ol class="board-list" id="board-list"></ol>
+      <p class="board-empty" id="board-empty" hidden>当前周期还没有上榜记录</p>
+    </section>
+
+    <footer class="footer">
+      <p>自然日/月/年按本机日历分桶统计，含本机与已授权采集的远程主机（同台远程主机跨设备自动去重）。</p>
+      <p id="updated" hidden></p>
+    </footer>
+  </main>
+
+  <script>
+    (() => {
+      'use strict';
+      const byId = id => document.getElementById(id);
+      const bridge = window.orca?.plugin;
+      const lifetime = new AbortController();
+      let disposed = false;
+      let busy = false;
+      let period = 'day';
+      let metric = 'real';
+      let state = null;
+      let board = null;
+      let problem = '';
+      let notice = '';
+      let pollTimer = null;
+      let devicePending = null;
+      const subscriptions = [];
+
+      const numeric = v => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+      function formatCount(value) {
+        if (!numeric(value)) return '—';
+        if (value >= 1e8) return `${(value / 1e8).toFixed(value >= 1e10 ? 0 : 2)}亿`;
+        if (value >= 1e4) return `${(value / 1e4).toFixed(value >= 1e6 ? 0 : 1)}万`;
+        return Math.round(value).toLocaleString('zh-CN');
+      }
+      function timeLabel(ms) {
+        if (!numeric(ms) || ms <= 0) return '—';
+        return new Date(ms).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+      }
+      function safeHttpsUrl(raw) {
+        if (typeof raw !== 'string' || !raw) return null;
+        try {
+          const u = new URL(raw);
+          return u.protocol === 'https:' ? u.toString() : null;
+        } catch { return null; }
+      }
+      function clearPoll() {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }
+
+      function renderRow(entry, maxScore) {
+        const li = document.createElement('li');
+        li.className = `board-row${entry.isSelf ? ' is-self' : ''}`;
+        if (entry.isSelf) li.id = 'ladder-self';
+
+        const top = document.createElement('div');
+        top.className = 'board-row-top';
+
+        const rank = document.createElement('span');
+        rank.className = `rank-num${entry.rank === 1 ? ' top1' : entry.rank === 2 ? ' top2' : entry.rank === 3 ? ' top3' : ''}`;
+        rank.textContent = entry.rank === 1 ? '🥇' : entry.rank === 2 ? '🥈' : entry.rank === 3 ? '🥉' : String(entry.rank);
+
+        const avatarUrl = safeHttpsUrl(entry.avatarUrl);
+        let avatarEl;
+        if (avatarUrl) {
+          const img = document.createElement('img');
+          img.className = 'avatar';
+          img.src = avatarUrl;
+          img.alt = '';
+          img.referrerPolicy = 'no-referrer';
+          avatarEl = img;
+        } else {
+          const badge = document.createElement('span');
+          badge.className = 'avatar';
+          badge.setAttribute('aria-hidden', 'true');
+          badge.textContent = (entry.displayName || '?').slice(0, 1).toUpperCase();
+          avatarEl = badge;
+        }
+
+        const name = document.createElement('span');
+        name.className = 'player-name';
+        name.textContent = entry.displayName || '匿名玩家';
+        name.title = name.textContent;
+
+        top.append(rank, avatarEl, name);
+        if (entry.isSelf) {
+          const selfTag = document.createElement('span');
+          selfTag.className = 'self-tag';
+          selfTag.textContent = '我';
+          top.append(selfTag);
+        }
+
+        const primaryScore = metric === 'net' ? entry.netTokens : entry.realTokens;
+        const altScore = metric === 'net' ? entry.realTokens : entry.netTokens;
+        const scoreCol = document.createElement('div');
+        scoreCol.className = 'score-col';
+        const scoreMain = document.createElement('span');
+        scoreMain.className = 'score-main';
+        scoreMain.textContent = formatCount(primaryScore);
+        scoreMain.title = `${Math.round(primaryScore).toLocaleString('zh-CN')} token（${metric === 'net' ? '含缓存总计' : '净输入+输出'} ${formatCount(altScore)}）`;
+        const scoreSub = document.createElement('span');
+        scoreSub.className = 'score-sub';
+        scoreSub.textContent = `${formatCount(entry.requests)} 次`;
+        scoreCol.append(scoreMain, scoreSub);
+        top.append(scoreCol);
+
+        const track = document.createElement('div');
+        track.className = 'bar-track';
+        const fill = document.createElement('div');
+        fill.className = 'bar-fill';
+        fill.style.width = `${maxScore > 0 ? Math.max(2, Math.round((primaryScore / maxScore) * 100)) : 0}%`;
+        track.append(fill);
+
+        li.append(top, track);
+        return li;
+      }
+
+      function render() {
+        if (disposed) return;
+        byId('refresh').disabled = busy || !bridge;
+        byId('refresh').classList.toggle('is-busy', busy);
+        byId('error').hidden = !problem;
+        byId('error').textContent = problem;
+        byId('notice').hidden = !notice;
+        byId('notice').textContent = notice;
+
+        for (const tab of document.querySelectorAll('[data-period]')) {
+          tab.setAttribute('aria-selected', String(tab.dataset.period === period));
+        }
+        for (const btn of document.querySelectorAll('[data-metric]')) {
+          btn.setAttribute('aria-pressed', String(btn.dataset.metric === metric));
+        }
+
+        const cfg = state?.config ?? {};
+        const auth = state?.auth ?? {};
+        const local = state?.localTotals?.[period] ?? null;
+        byId('period-key').textContent = board?.key || local?.key || '—';
+
+        if (document.activeElement !== byId('server-url') && cfg.serverUrl) {
+          byId('server-url').value = cfg.serverUrl;
+        }
+        byId('opt-sync').checked = Boolean(cfg.enabled);
+        byId('opt-sync').disabled = !auth.authenticated;
+        byId('opt-anon').checked = Boolean(cfg.anonymousMode);
+
+        byId('profile-editor').hidden = !auth.authenticated;
+        if (auth.authenticated && document.activeElement !== byId('edit-name')) {
+          byId('edit-name').value = auth.user?.displayName || '';
+        }
+        byId('copy-claim').hidden = !auth.claimCode;
+
+        if (!byId('join-name').value && auth.displayHint) {
+          byId('join-name').placeholder = `榜单昵称（建议：${auth.displayHint}）`;
+        }
+
+        byId('join-github').hidden = auth.githubEnabled === false;
+        byId('auth-box').hidden = Boolean(auth.authenticated);
+        byId('me-footer').hidden = !auth.authenticated;
+
+        const me = board?.me ?? null;
+        const scoreLabel = metric === 'net' ? '净输入+输出 Token' : '消耗 Token（含缓存读写）';
+        byId('me-score-label').textContent = auth.authenticated && me ? `上榜战绩 · ${scoreLabel}` : `本机战绩 · ${scoreLabel}`;
+
+        const displayReal = auth.authenticated && me ? me.realTokens : local?.realTokens;
+        const displayNet = auth.authenticated && me ? me.netTokens : local?.netTokens;
+        const displayReqs = auth.authenticated && me ? me.requests : local?.requests;
+        const primaryVal = metric === 'net' ? displayNet : displayReal;
+        const altVal = metric === 'net' ? displayReal : displayNet;
+
+        byId('me-score').textContent = formatCount(primaryVal);
+        byId('me-score').title = numeric(primaryVal) ? `${Math.round(primaryVal).toLocaleString('zh-CN')} token` : '';
+        byId('me-alt-score').textContent = metric === 'net'
+          ? `含缓存总量 ${formatCount(altVal)}`
+          : `净输入+输出 ${formatCount(altVal)}`;
+        byId('me-requests').textContent = formatCount(displayReqs);
+
+        if (!auth.authenticated) {
+          byId('me-title').textContent = '我的本地战况';
+          byId('me-rank').textContent = '未参与天梯';
+          byId('me-gap').textContent = local ? '本机已就绪，加入后参与排行' : '正在汇总本机统计…';
+        } else {
+          byId('me-title').textContent = auth.user?.displayName ? `我 · ${auth.user.displayName}` : '我的战况';
+          if (me?.rank) {
+            byId('me-rank').textContent = `#${me.rank}`;
+            if (me.rank === 1) {
+              byId('me-gap').textContent = `当前榜首 🏆 · 超越 ${me.percentile}%`;
+            } else if (me.inTop100) {
+              byId('me-gap').textContent = `超越 ${me.percentile}% · 距前一名差 ${formatCount(me.gapToPrev)}`;
+            } else {
+              byId('me-gap').textContent = `距前 100 名差 ${formatCount(me.gapToTop100)} · 距前一名差 ${formatCount(me.gapToPrev)}`;
+            }
+          } else {
+            byId('me-rank').textContent = '暂未上榜';
+            byId('me-gap').textContent = cfg.enabled
+              ? (me?.totalParticipants >= 100 ? `本周期暂未产生数据 · 入榜需 ${formatCount(me.gapToTop100)}` : '本周期暂未产生数据')
+              : '已暂停同步（可在设置中开启）';
+          }
+          byId('locate-me').hidden = !me?.inTop100;
+          const sync = state?.sync ?? {};
+          byId('me-sync-info').textContent = sync.lastSyncError
+            ? `同步异常：${sync.lastSyncError}`
+            : (sync.lastSyncAt ? `已同步 ${sync.syncedDays} 天 · ${timeLabel(sync.lastSyncAt)}` : '尚未同步');
+        }
+
+        const top100 = Array.isArray(board?.top100) ? board.top100 : [];
+        byId('board-count').textContent = board ? `共 ${formatCount(board.totalParticipants)} 人` : '未连接服务';
+        const maxScore = top100.reduce((top, row) => Math.max(top, metric === 'net' ? row.netTokens : row.realTokens), 0);
+        byId('board-list').replaceChildren(...top100.map(row => renderRow(row, maxScore)));
+        byId('board-empty').hidden = top100.length > 0;
+        byId('board-empty').textContent = board
+          ? '当前周期还没有上榜记录'
+          : '未连接到天梯服务，可点击右上角「设置」检查服务地址或运行本地服务（npm run leaderboard-server）';
+
+        byId('updated').hidden = !numeric(board?.updatedAt);
+        byId('updated').textContent = `榜单更新于 ${timeLabel(board?.updatedAt)}`;
+      }
+
+      async function callWorker(name, input) {
+        if (!bridge?.request) throw new Error('请在 Orca 插件侧栏中打开');
+        return bridge.request(name, input, { signal: lifetime.signal, timeoutMs: 15000 });
+      }
+
+      async function loadBoard({ syncFirst = false } = {}) {
+        if (busy || disposed || !bridge) return;
+        busy = true;
+        problem = '';
+        render();
+        try {
+          const res = await callWorker('leaderboard.refresh', { period, metric, syncFirst });
+          if (disposed) return;
+          state = res.state;
+          board = res.board;
+          notice = res.problem || '';
+        } catch (error) {
+          if (!disposed) problem = String(error?.message || '天梯加载失败').slice(0, 300);
+        } finally {
+          if (!disposed) { busy = false; render(); }
+        }
+      }
+
+      async function loadInitial() {
+        if (!bridge) {
+          problem = '请在 Orca 的「战况天梯」面板中打开。';
+          render();
+          return;
+        }
+        try {
+          state = await callWorker('leaderboard.state');
+          board = state?.cachedBoards?.[`${period}:${metric}`] ?? null;
+          render();
+          await loadBoard({ syncFirst: false });
+        } catch (error) {
+          problem = String(error?.message || '初始化失败').slice(0, 300);
+          render();
+        }
+      }
+
+      for (const tab of document.querySelectorAll('[data-period]')) {
+        tab.addEventListener('click', () => {
+          period = tab.dataset.period;
+          board = state?.cachedBoards?.[`${period}:${metric}`] ?? null;
+          render();
+          void loadBoard({ syncFirst: false });
+        });
+      }
+      for (const btn of document.querySelectorAll('[data-metric]')) {
+        btn.addEventListener('click', () => {
+          metric = btn.dataset.metric;
+          board = state?.cachedBoards?.[`${period}:${metric}`] ?? null;
+          render();
+          void loadBoard({ syncFirst: false });
+        });
+      }
+
+      byId('refresh').addEventListener('click', () => void loadBoard({ syncFirst: true }));
+      byId('sync-now').addEventListener('click', () => void loadBoard({ syncFirst: true }));
+      byId('locate-me').addEventListener('click', () => {
+        byId('ladder-self')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+
+      const setSettingsOpen = open => {
+        byId('settings-card').hidden = !open;
+        byId('toggle-settings').setAttribute('aria-expanded', String(open));
+      };
+      byId('toggle-settings').addEventListener('click', () => setSettingsOpen(byId('settings-card').hidden));
+      byId('close-settings').addEventListener('click', () => setSettingsOpen(false));
+
+      byId('save-server').addEventListener('click', async () => {
+        problem = ''; notice = '';
+        try {
+          state = await callWorker('leaderboard.setConfig', { serverUrl: byId('server-url').value });
+          board = null;
+          await loadBoard({ syncFirst: false });
+        } catch (error) {
+          problem = String(error?.message || '保存失败').slice(0, 300);
+          render();
+        }
+      });
+
+      byId('opt-sync').addEventListener('change', async event => {
+        problem = '';
+        try {
+          state = await callWorker('leaderboard.setConfig', { enabled: event.target.checked });
+          if (event.target.checked) await loadBoard({ syncFirst: true });
+          else render();
+        } catch (error) {
+          problem = String(error?.message || '设置更新失败').slice(0, 300);
+          render();
+        }
+      });
+
+      byId('opt-anon').addEventListener('change', async event => {
+        problem = '';
+        try {
+          state = await callWorker('leaderboard.setConfig', { anonymousMode: event.target.checked });
+          await loadBoard({ syncFirst: false });
+        } catch (error) {
+          problem = String(error?.message || '设置更新失败').slice(0, 300);
+          render();
+        }
+      });
+
+      byId('save-name').addEventListener('click', async () => {
+        problem = '';
+        try {
+          state = await callWorker('leaderboard.updateProfile', { displayName: byId('edit-name').value });
+          await loadBoard({ syncFirst: false });
+        } catch (error) {
+          problem = String(error?.message || '修改昵称失败').slice(0, 300);
+          render();
+        }
+      });
+
+      byId('copy-claim').addEventListener('click', async () => {
+        const code = state?.auth?.claimCode;
+        if (!code) return;
+        try {
+          await navigator.clipboard.writeText(code);
+          notice = `已复制恢复码 ${code}，请妥善保存以便换机找回。`;
+        } catch {
+          notice = `您的匿名恢复码：${code}`;
+        }
+        render();
+      });
+
+      byId('logout').addEventListener('click', async () => {
+        problem = ''; notice = '';
+        clearPoll();
+        try {
+          state = await callWorker('leaderboard.logout');
+          await loadBoard({ syncFirst: false });
+        } catch (error) {
+          problem = String(error?.message || '退出失败').slice(0, 300);
+          render();
+        }
+      });
+
+      byId('join-anon').addEventListener('click', async () => {
+        problem = ''; notice = '';
+        try {
+          const displayName = byId('join-name').value.trim() || state?.auth?.displayHint || '';
+          state = await callWorker('leaderboard.authAnon', { displayName });
+          if (state?.auth?.claimCode) {
+            notice = `已加入天梯！您的恢复码为 ${state.auth.claimCode}（可在设置中复制）。`;
+          }
+          await loadBoard({ syncFirst: true });
+        } catch (error) {
+          problem = String(error?.message || '加入失败').slice(0, 300);
+          render();
+        }
+      });
+
+      byId('toggle-claim').addEventListener('click', () => {
+        byId('claim-box').hidden = !byId('claim-box').hidden;
+      });
+      byId('claim-submit').addEventListener('click', async () => {
+        problem = ''; notice = '';
+        try {
+          state = await callWorker('leaderboard.authClaim', { claimCode: byId('claim-input').value });
+          byId('claim-box').hidden = true;
+          await loadBoard({ syncFirst: true });
+        } catch (error) {
+          problem = String(error?.message || '恢复码无效或服务不可用').slice(0, 300);
+          render();
+        }
+      });
+
+      function scheduleGithubPoll(delayMs) {
+        clearPoll();
+        if (!devicePending || disposed) return;
+        pollTimer = setTimeout(async () => {
+          if (!devicePending || disposed) return;
+          try {
+            const res = await callWorker('leaderboard.authGithubPoll', { deviceCode: devicePending.deviceCode });
+            if (res?.status === 'authorized') {
+              devicePending = null;
+              byId('github-box').hidden = true;
+              state = res.state;
+              notice = 'GitHub 登录成功，正在同步战绩…';
+              await loadBoard({ syncFirst: true });
+              return;
+            }
+            if (res?.status === 'expired') {
+              devicePending = null;
+              byId('github-box').hidden = true;
+              problem = 'GitHub 授权已过期或被取消，请重试。';
+              render();
+              return;
+            }
+            const nextMs = res?.status === 'slow_down' ? Math.max(10_000, (res.interval ?? 10) * 1000) : delayMs;
+            scheduleGithubPoll(nextMs);
+          } catch {
+            scheduleGithubPoll(delayMs);
+          }
+        }, delayMs);
+      }
+
+      byId('join-github').addEventListener('click', async () => {
+        problem = ''; notice = '';
+        try {
+          const started = await callWorker('leaderboard.authGithubStart');
+          devicePending = started;
+          byId('github-code').textContent = started.userCode;
+          byId('github-box').hidden = false;
+          scheduleGithubPoll(Math.max(5000, (started.interval ?? 5) * 1000));
+        } catch (error) {
+          problem = String(error?.message || '无法发起 GitHub 登录').slice(0, 300);
+          render();
+        }
+      });
+      byId('github-open').addEventListener('click', () => {
+        const url = safeHttpsUrl(devicePending?.verificationUri);
+        if (url && window.orca?.shell?.openExternal) {
+          void window.orca.shell.openExternal(url);
+        }
+      });
+      byId('github-copy').addEventListener('click', async () => {
+        if (!devicePending?.userCode) return;
+        try {
+          await navigator.clipboard.writeText(devicePending.userCode);
+          notice = `已复制验证码 ${devicePending.userCode}`;
+        } catch {
+          notice = `验证码：${devicePending.userCode}`;
+        }
+        render();
+      });
+      byId('github-cancel').addEventListener('click', () => {
+        devicePending = null;
+        clearPoll();
+        byId('github-box').hidden = true;
+      });
+
+      window.addEventListener('pagehide', () => {
+        disposed = true;
+        clearPoll();
+        lifetime.abort();
+        for (const sub of subscriptions) sub?.dispose?.();
+      }, { once: true });
+
+      if (typeof window.orca?.on === 'function') {
+        subscriptions.push(window.orca.on('theme', theme => {
+          if (disposed || !['light', 'dark'].includes(theme?.colorScheme)) return;
+          document.documentElement.classList.remove('light', 'dark');
+          document.documentElement.classList.add(theme.colorScheme);
+        }));
+      }
+      void loadInitial();
+    })();
+  </script>
+</body>
+</html>

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.6.0] - 2026-11-18
+
+### Added
+- **战况天梯 (Battle Leaderboard)**: a new sidebar panel ranks users by token totals for the current calendar **day**, **month** and **year**, showing the Top 100 plus your own exact rank, percentile, and the gap to the player above and to the Top 100 — including when you are outside the Top 100. Both **含缓存总量** (real total) and **净输入+输出** (net) metrics are available. Existing 对话 TPS panel and layout are unchanged.
+- **Opt-in, sanitized sync**: synchronization is off by default. After joining, only per-day aggregated counters (`realTokens`, `netTokens`, `requests`) keyed by an opaque source scope leave the machine. Prompts, replies, project names, paths and session IDs are never uploaded.
+- **Anonymous join with recovery code** (`ORCA-XXXXXXXXXXXX`) and **GitHub OAuth Device Flow** login; credentials live in Orca's encrypted `secrets:own` store, never in plain storage.
+- **Multi-device and remote dedup**: source scopes are `local:<hash>` per desktop and `remote:<hash>` per SSH endpoint, and the server upserts on `(user, scope, day)`, so several desktops scanning the same remote host count it once while their local usage still adds up.
+- **Bundled leaderboard server** (`server/leaderboard-server.mjs`): zero external dependencies (`node:http` + `node:sqlite`), with `--seed-demo` for local testing. The ranked board needs this server (or your own deployment); local day/month/year totals work without it.
+- New `secrets:own` and `settings:own` capabilities, plus three plugin settings (enable sync, server URL, anonymous mode).
+
+### Fixed
+- **Orca storage 1024-key limit**: the usage index wrote one `usage:unit:<sha256>` key per session file, which began failing with `storage exceeds the 1024-key limit` once a machine had more than ~1000 historical sessions, silently dropping monthly/yearly totals. Units are now compacted into 64 hashed buckets (`usage:b:00`…`usage:b:63`); legacy keys are deleted before the consolidated buckets are written, so migration succeeds even at the limit.
+
 ## [Unreleased]
 
 ### Fixed

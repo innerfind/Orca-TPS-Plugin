@@ -21,6 +21,7 @@
 - **严格剔除工具运行耗时**：不再用整轮挂钟时间充当分母，避免本地编译、测试脚本执行或权限确认弹窗拉低模型真实生成速度。
 - **完整支持四大 CLI 与子代理**：原生解析本机终端中的 **Claude Code**（含 `<SESSION_ID>/subagents` 与 `workflows` 子代理）、**Codex CLI**、**OpenCode（v1 / v2）**、**Pi Agent** 与 **Antigravity CLI**，并支持只读融合 `~/.cc-switch/cc-switch.db` 本地路由代理的精确首字记录。
 - **用量战况与热力图**：面板顶部提供「当日战况 / 近一周战况 / 近一月战况」，并附近一年的用量热力图（鼠标悬停查看每日数值）。统计范围包括 Claude Code、Codex、OpenCode、Pi 与 Antigravity CLI，汇总 token 总量（新输入、输出、缓存写入与缓存读取，与 CC Switch 的真实总量一致）、缓存命中率、请求数，并按 agent 与模型拆分。同一分组内还有「模型均速」排名（按模型的单次请求平均输出速度 tokens/s，基于本地会话日志，从高到低）。后台在本地增量统计，只保存计数，不保存对话内容。
+- **战况天梯（可选开启）**：独立面板按 **当日 / 本月 / 本年** Token 总量排行，展示全榜前 100 与自己的精确名次（包括 100 名开外的名次）。**默认完全关闭**，加入排行是明确的主动操作。仅上传按日聚合的数字计数，绝不上传提示词、回复正文、项目名、路径或会话 ID。全网排行需要天梯服务端（见下文）；未配置服务端时，面板照常显示本机日/月/年战况。
 - **只读会话数据**：解析器只读会话日志和数据库。远程项目通过 Orca 连接回传统计结果，提示词和回复正文留在解析端。
 
 ---
@@ -111,6 +112,60 @@ Set-Location "$env:USERPROFILE\Applications\orca-tps-plugin"
 | **Pi** | `~/.pi/agent/sessions`（支持 `PI_CODING_AGENT_DIR`） |
 | **Antigravity CLI** | token：`~/.gemini/antigravity-cli/brain/<会话ID>/.system_generated/logs/transcript.jsonl`（只读实时 transcript，忽略轮转副本）。模型与耗时：`~/.gemini/antigravity-cli/conversations/<会话ID>.db`（只读，仅读取步骤与生成记录的元数据） |
 | **CC Switch 代理库（可选）** | `~/.cc-switch/cc-switch.db`（支持 `CC_SWITCH_DB_PATH`） |
+
+---
+
+## 战况天梯
+
+「战况天梯」面板把 Token 用量放进排行榜，分两部分：
+
+- **本机战况（始终可用）**：本机 + 已授权的远程主机的**当日 / 本月 / 本年**汇总量，支持 **含缓存总量** 与 **净输入+输出** 两种口径。
+- **排行榜（需要服务端）**：前 100 名，以及自己的精确名次、超越百分比、距前一名与距前 100 名的差值。周期按**当前自然日 / 自然月 / 自然年**计算，零点、每月 1 日、每年 1 月 1 日自动开新榜。
+
+> **要启用全网排行，需要启动（或指向）一个天梯服务端。** 插件不内置任何公共地址。地址可在面板「设置」中修改，或在 Orca 设置 → 插件中填写。
+
+### 启动内置服务端
+
+仓库自带零外部依赖的服务端（`server/leaderboard-server.mjs`，要求 Node.js ≥ 22.13，使用内置 `node:sqlite`）：
+
+```sh
+# 本地测试：附带 115 名模拟选手，便于对照名次
+node server/leaderboard-server.mjs --seed-demo
+
+# 正式部署：指定监听与数据库位置
+node server/leaderboard-server.mjs --host 0.0.0.0 --port 8787 --db /var/lib/orca-tps/leaderboard.db
+```
+
+| 参数 / 环境变量 | 用途 |
+| :--- | :--- |
+| `--host` / `LEADERBOARD_HOST` | 监听地址（默认 `127.0.0.1`） |
+| `--port` / `LEADERBOARD_PORT` | 端口（默认 `8787`） |
+| `--db` / `LEADERBOARD_DB` | SQLite 文件（默认 `~/.orca-tps-leaderboard/leaderboard.db`） |
+| `--seed-demo` | 一次性写入 115 名模拟选手，便于测试排名位置 |
+| `GITHUB_CLIENT_ID` | 启用 GitHub OAuth 设备码登录；未设置时面板只提供匿名加入 |
+
+分享给他人前请在前面加 HTTPS（Caddy、Nginx 或隧道均可）：插件把登录凭据存在 Orca 加密的 `secrets:own` 中，面板也只接受 `http(s)` 地址。
+
+### 加入方式与身份
+
+- **匿名加入**：签发一个 `ORCA-XXXXXXXXXXXX` 恢复码，请妥善保存；在另一台机器输入即可找回同一个天梯账号。
+- **GitHub 登录**（服务端配置了 `GITHUB_CLIENT_ID` 时）：走 OAuth 设备码流程，授权页通过 Orca 的 `shell.openExternal` 打开，访问令牌不会进入面板。
+- **不使用 Orca 登录 ID 作为身份**：插件宿主 API 不提供任何账号或 Profile 标识；未登录 Orca Cloud 的本地 Profile 本身就是匿名的（`local-default`）。从磁盘猜测身份既不可靠也无法验签，因此天梯使用自己的凭据体系。
+
+### 上传内容
+
+仅按 `(来源域, 本地日期)` 上传：`realTokens`、`netTokens`、`requests`。来源域是不可逆哈希：
+
+- `local:<hash>` —— 每台桌面端一个，本地生成。
+- `remote:<hash>` —— 每个 SSH 端点一个（`host + port + username`），与远程采集使用的标识一致。
+
+服务端按 `(用户, 来源域, 日期)` 幂等覆盖，因此多台桌面端扫描同一台远程服务器时**只计一次**；同一用户的名次为其各来源域之和，第二台机器是累加而不是覆盖。
+
+### 隐私控制
+
+- 在主动加入并开启同步之前，**不会上传任何数据**。
+- **隐身模式**：在公开榜单中隐藏昵称与头像，仅自己面板可见名次。
+- 退出天梯会删除已保存的令牌并停止所有上传。
 
 ---
 

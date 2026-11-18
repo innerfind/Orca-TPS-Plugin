@@ -3,7 +3,7 @@
   "manifestVersion": 2,
   "id": "tps-stats",
   "name": "Orca 软件 Tokens 统计插件",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Real-time token usage, per-request TPS, TTFT, and prompt-cache hit rate statistics plugin for Orca IDE (Claude Code, Codex, OpenCode, Pi), powered by CC Switch metrics.",
   "author": {
     "name": "jecyxyf",
@@ -45,6 +45,13 @@
         "icon": "activity",
         "entry": "src/panel.html",
         "ui": "html"
+      },
+      {
+        "id": "ladder",
+        "title": "战况天梯",
+        "icon": "bar-chart-3",
+        "entry": "src/ladder.html",
+        "ui": "html"
       }
     ],
     "commands": [
@@ -61,6 +68,30 @@
         "tooltip": "最新请求速度与缓存命中率（CC Switch 算法）；右侧对话 TPS 查看请求明细，点击刷新。",
         "command": "tps.refresh"
       }
+    ],
+    "settings": [
+      {
+        "key": "leaderboard.enabled",
+        "title": "启用战况天梯同步",
+        "description": "开启后仅上传按日脱敏汇总的 Token 计数（不含对话内容、路径或会话信息）。需先在「战况天梯」面板登录或匿名加入。",
+        "type": "boolean",
+        "default": false
+      },
+      {
+        "key": "leaderboard.serverUrl",
+        "title": "战况天梯服务端地址",
+        "description": "支持自建服务端或本地测试服务（默认 http://127.0.0.1:8787）。",
+        "type": "string",
+        "default": "http://127.0.0.1:8787",
+        "placeholder": "http://127.0.0.1:8787"
+      },
+      {
+        "key": "leaderboard.anonymousMode",
+        "title": "天梯隐身模式",
+        "description": "开启后在公开榜单中隐藏自己的昵称与头像（仅自己可见实际名次）。",
+        "type": "boolean",
+        "default": false
+      }
     ]
   },
   "capabilities": [
@@ -69,6 +100,12 @@
     },
     {
       "kind": "workspace:read"
+    },
+    {
+      "kind": "secrets:own"
+    },
+    {
+      "kind": "settings:own"
     }
   ]
 }

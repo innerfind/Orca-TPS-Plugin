@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, mkdir, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  UNIT_KEY_PREFIX, USAGE_SCHEMA, accumulateRecords, createUsageIndex, dayKeyAgo, localDayKey, realTokens, summarizeUsage, usageCutoffMs
+  UNIT_KEY_PREFIX, USAGE_BUCKET_PREFIX, USAGE_SCHEMA, accumulateRecords, createUsageIndex, dayKeyAgo, localDayKey, realTokens, summarizeLadder, summarizeUsage, usageCutoffMs
 } from '../src/usage-summary.mjs';
 import { discoverUsageUnits } from '../src/data.mjs';
 
@@ -418,8 +418,107 @@ test('index units stored before speed counters keep their totals, are re-read on
   assert.deepEqual(reads, ['old']);
   assert.equal(index.summary().windows.today.tokens, 150);
   assert.equal(index.summary().windows.today.speeds[0].tokensPerSecond, 120);
-  assert.equal(storage.map.get(`${UNIT_KEY_PREFIX}old`).schema, USAGE_SCHEMA);
+  assert.equal(storage.map.has(`${UNIT_KEY_PREFIX}old`), false, 'legacy per-unit key is cleaned up after bucket migration');
+  const migratedUnit = [...storage.map.entries()]
+    .filter(([k]) => k.startsWith(USAGE_BUCKET_PREFIX))
+    .map(([, v]) => v.units?.old)
+    .find(Boolean);
+  assert.equal(migratedUnit?.schema, USAGE_SCHEMA);
 
   await index.refresh();
   assert.deepEqual(reads, ['old'], 'a current-schema unit is not read again');
+});
+
+test('bucketed storage migrates a full 1024-key store and handles 1500 units under Orca key limit', async () => {
+  const now = at(2026, 11, 18, 12), today = localDayKey(now);
+  const map = new Map();
+  const cappedStorage = {
+    map,
+    async keys() { return [...map.keys()]; },
+    async get(key) { return map.has(key) ? structuredClone(map.get(key)) : null; },
+    async set(key, value) {
+      if (!map.has(key) && map.size >= 1024) throw new Error('storage exceeds the 1024-key limit');
+      map.set(key, structuredClone(value));
+    },
+    async delete(key) { map.delete(key); }
+  };
+  // Pre-fill storage right up to Orca's 1024-key limit with legacy unit keys + 24 channel keys.
+  for (let i = 0; i < 24; i += 1) map.set(`tps:channel:v1:ch${i}`, { updatedAt: now, records: [] });
+  for (let i = 0; i < 1000; i += 1) {
+    map.set(`${UNIT_KEY_PREFIX}legacy-${i}`, {
+      stamp: 's1', readAt: now, schema: USAGE_SCHEMA,
+      days: { [today]: { claude: { 'claude-opus-5-5': [1, 10, 5, 0, 0, 1, 50, 0] } } }
+    });
+  }
+  assert.equal(map.size, 1024);
+
+  const descriptors = Array.from({ length: 1500 }, (_, i) => ({
+    key: i < 1000 ? `legacy-${i}` : `new-${i}`,
+    stamp: 's1',
+    bytes: 100,
+    mtimeMs: now - i,
+    read: async () => ({ [today]: { claude: { 'claude-opus-5-5': [1, 10, 5, 0, 0, 1, 50, 0] } } })
+  }));
+  const errors = [];
+  const index = createUsageIndex({
+    storage: cappedStorage,
+    discover: async () => descriptors,
+    now: () => now,
+    log: msg => errors.push(msg)
+  });
+  await index.refresh();
+  assert.deepEqual(errors, [], 'bucket migration and 1500-unit indexing must never hit the 1024-key limit');
+  assert.ok(map.size <= 24 + 64, `expected <= 88 keys after bucketing, got ${map.size}`);
+  assert.equal(index.summary().windows.today.requests, 1500);
+  assert.equal(index.summary().windows.today.tokens, 22_500);
+});
+
+test('summarizeLadder computes calendar day, month, year totals and isolates covered remote scopes', () => {
+  const now = at(2026, 11, 18, 12);
+  const units = new Map([
+    ['u1', {
+      days: {
+        '2026-11-18': { claude: { 'claude-opus-5-5': [2, 100, 50, 800, 50] } },
+        '2026-11-01': { codex: { 'gpt-6': [1, 20, 10, 0, 0] } },
+        '2026-02-10': { pi: { m: [3, 30, 30, 40, 0] } },
+        '2025-12-31': { claude: { m: [9, 999, 999, 0, 0] } }
+      }
+    }],
+    ['remote:aaaaaaaaaaaaaaaaaaaaaaaa:u2', {
+      days: {
+        '2026-11-18': { codex: { 'gpt-6': [1, 10, 20, 70, 0] } }
+      }
+    }],
+    ['remote:bbbbbbbbbbbbbbbbbbbbbbbb:u3', {
+      days: {
+        '2026-11-18': { codex: { 'gpt-6': [1, 5, 5, 0, 0] } }
+      }
+    }]
+  ]);
+  const res = summarizeLadder(units.entries(), now, {
+    localScopeId: 'dev123',
+    coveredRemoteScopes: new Set(['remote:aaaaaaaaaaaaaaaaaaaaaaaa:'])
+  });
+  // Local totals include all cached units (even offline remote bbbbb...), matching summary().
+  assert.equal(res.localTotals.day.key, '2026-11-18');
+  assert.equal(res.localTotals.day.realTokens, 1110);
+  assert.equal(res.localTotals.day.netTokens, 190);
+  assert.equal(res.localTotals.day.requests, 4);
+  assert.equal(res.localTotals.month.key, '2026-11');
+  assert.equal(res.localTotals.month.realTokens, 1140);
+  assert.equal(res.localTotals.year.key, '2026');
+  assert.equal(res.localTotals.year.realTokens, 1240, '2025-12-31 is excluded from calendar year 2026');
+
+  // Sync payloads exclude uncovered remote scope bbbbb... so stale caches cannot overwrite fresher machines,
+  // while keeping valid days within the 365-day window (including 2025-12-31).
+  assert.deepEqual(
+    res.scopedDays.map(d => `${d.sourceScope}@${d.day}=${d.realTokens}`),
+    [
+      'local:dev123@2026-11-18=1000',
+      'remote:aaaaaaaaaaaaaaaaaaaaaaaa@2026-11-18=100',
+      'local:dev123@2026-11-01=30',
+      'local:dev123@2026-02-10=100',
+      'local:dev123@2025-12-31=1998'
+    ]
+  );
 });

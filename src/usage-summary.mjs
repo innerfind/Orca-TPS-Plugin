@@ -3,6 +3,8 @@
 // re-read when its stamp changes. Stored values are counts keyed by day, agent and model; no message text.
 
 export const UNIT_KEY_PREFIX = 'usage:unit:';
+export const USAGE_BUCKET_PREFIX = 'usage:b:';
+export const USAGE_BUCKET_COUNT = 64;
 export const REMOTE_USAGE_PREFIX = 'remote:';
 export const USAGE_READ_BATCH = 16;
 export const WINDOWS = [['today', 1], ['week', 7], ['month', 30]];
@@ -170,7 +172,130 @@ function addCounters(target, cell) {
   target.cacheWrite += cell[4];
 }
 
+const emptyPeriod = key => ({
+  key,
+  realTokens: 0,
+  netTokens: 0,
+  cacheReadTokens: 0,
+  cacheCreationTokens: 0,
+  requests: 0
+});
+
+/** Aggregate local calendar day / month / year totals plus per-(sourceScope, day) sync payloads. */
+export function summarizeLadder(unitEntries, nowMs, { localScopeId = null, coveredRemoteScopes = null } = {}) {
+  const today = localDayKey(nowMs);
+  const monthKey = today.slice(0, 7);
+  const yearKey = today.slice(0, 4);
+  const firstDay = dayKeyAgo(nowMs, HISTORY_DAYS - 1);
+  const localTotals = {
+    day: emptyPeriod(today),
+    month: emptyPeriod(monthKey),
+    year: emptyPeriod(yearKey)
+  };
+  const scoped = new Map();
+
+  for (const [unitKey, unit] of unitEntries) {
+    const days = unit?.days;
+    if (!days || typeof days !== 'object') continue;
+    let sourceScope = null;
+    if (unitKey.startsWith(REMOTE_USAGE_PREFIX)) {
+      const colon = unitKey.indexOf(':', REMOTE_USAGE_PREFIX.length);
+      if (colon > REMOTE_USAGE_PREFIX.length) {
+        const prefix = unitKey.slice(0, colon + 1);
+        if (!coveredRemoteScopes || coveredRemoteScopes.has(prefix)) {
+          sourceScope = unitKey.slice(0, colon);
+        }
+      }
+    } else if (localScopeId) {
+      sourceScope = `local:${localScopeId}`;
+    }
+
+    for (const [day, byProvider] of Object.entries(days)) {
+      if (day < firstDay || day > today || !byProvider || typeof byProvider !== 'object') continue;
+      let dayReqs = 0, dayFresh = 0, dayOut = 0, dayRead = 0, dayWrite = 0;
+      for (const byModel of Object.values(byProvider)) {
+        if (!byModel || typeof byModel !== 'object') continue;
+        for (const cell of Object.values(byModel)) {
+          if (!Array.isArray(cell)) continue;
+          dayReqs += numberOr0(cell[0]);
+          dayFresh += numberOr0(cell[1]);
+          dayOut += numberOr0(cell[2]);
+          dayRead += numberOr0(cell[3]);
+          dayWrite += numberOr0(cell[4]);
+        }
+      }
+      const dayNet = dayFresh + dayOut;
+      const dayReal = dayNet + dayRead + dayWrite;
+      if (day === today) addLadderPeriod(localTotals.day, dayReal, dayNet, dayRead, dayWrite, dayReqs);
+      if (day.startsWith(monthKey)) addLadderPeriod(localTotals.month, dayReal, dayNet, dayRead, dayWrite, dayReqs);
+      if (day.startsWith(yearKey)) addLadderPeriod(localTotals.year, dayReal, dayNet, dayRead, dayWrite, dayReqs);
+      if (sourceScope && (dayReal > 0 || dayReqs > 0)) {
+        let byDay = scoped.get(sourceScope);
+        if (!byDay) { byDay = new Map(); scoped.set(sourceScope, byDay); }
+        let bucket = byDay.get(day);
+        if (!bucket) { bucket = { sourceScope, day, realTokens: 0, netTokens: 0, requests: 0 }; byDay.set(day, bucket); }
+        bucket.realTokens += dayReal;
+        bucket.netTokens += dayNet;
+        bucket.requests += dayReqs;
+      }
+    }
+  }
+
+  const scopedDays = [];
+  for (const byDay of scoped.values()) {
+    for (const item of byDay.values()) scopedDays.push(item);
+  }
+  scopedDays.sort((a, b) => (a.day < b.day ? 1 : a.day > b.day ? -1 : a.sourceScope < b.sourceScope ? -1 : 1));
+  return { localTotals, scopedDays };
+}
+
+function addLadderPeriod(target, real, net, read, write, reqs) {
+  target.realTokens += real;
+  target.netTokens += net;
+  target.cacheReadTokens += read;
+  target.cacheCreationTokens += write;
+  target.requests += reqs;
+}
+
 const validUnit = value => value && typeof value === 'object' && typeof value.stamp === 'string' && value.days && typeof value.days === 'object';
+
+function bucketIndex(key) {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % USAGE_BUCKET_COUNT;
+}
+
+const bucketStorageKey = index => `${USAGE_BUCKET_PREFIX}${String(index).padStart(2, '0')}`;
+
+function pruneDays(days, minDay) {
+  if (!days || typeof days !== 'object') return {};
+  const pruned = {};
+  for (const [day, byProvider] of Object.entries(days)) {
+    if (day >= minDay && byProvider && typeof byProvider === 'object' && Object.keys(byProvider).length > 0) {
+      pruned[day] = byProvider;
+    }
+  }
+  return pruned;
+}
+
+function compactUnit(unit, minDay) {
+  const clean = {
+    stamp: unit.stamp,
+    days: pruneDays(unit.days, minDay),
+    ...(Number.isFinite(unit.readAt) ? { readAt: unit.readAt } : {}),
+    ...(Number.isFinite(unit.schema) ? { schema: unit.schema } : {})
+  };
+  if (unit.failed) {
+    clean.failed = true;
+    if (typeof unit.failedStamp === 'string') clean.failedStamp = unit.failedStamp;
+    if (Number.isFinite(unit.failures)) clean.failures = unit.failures;
+    if (Number.isFinite(unit.retryAt)) clean.retryAt = unit.retryAt;
+  }
+  return clean;
+}
 
 /**
  * Incremental index. `discover(cutoffMs)` returns unit descriptors:
@@ -183,12 +308,68 @@ const RETRY_MIN_MS = 15_000, RETRY_MAX_MS = 10 * 60_000;
 export function createUsageIndex({ storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, log = () => {} }) {
   const units = new Map();
   let loaded = null, progress = { done: 0, total: 0 }, updatedAt = null;
+  let lastCoveredRemoteScopes = new Set();
+
+  async function writeBucket(index, minDay) {
+    const entries = {};
+    for (const [key, unit] of units) {
+      if (bucketIndex(key) !== index) continue;
+      entries[key] = compactUnit(unit, minDay);
+    }
+    const key = bucketStorageKey(index);
+    if (!Object.keys(entries).length) {
+      await storage.delete(key).catch(() => {});
+      return;
+    }
+    await storage.set(key, { v: 1, units: entries });
+  }
+
+  async function flushBuckets(indices) {
+    if (!indices.size) return;
+    const minDay = dayKeyAgo(now(), HISTORY_DAYS - 1);
+    for (const index of indices) {
+      try { await writeBucket(index, minDay); }
+      catch (error) { log(`统计索引写入失败：${error?.message ?? 'unknown'}`); }
+    }
+  }
 
   async function load() {
-    const keys = (await storage.keys()).filter(key => key.startsWith(UNIT_KEY_PREFIX));
-    for (const key of keys) {
+    const keys = await storage.keys();
+    const bucketKeys = keys.filter(key => key.startsWith(USAGE_BUCKET_PREFIX));
+    for (const key of bucketKeys) {
       const value = await storage.get(key);
-      if (validUnit(value)) units.set(key.slice(UNIT_KEY_PREFIX.length), value);
+      if (value && typeof value === 'object' && value.units && typeof value.units === 'object') {
+        for (const [unitKey, unit] of Object.entries(value.units)) {
+          if (validUnit(unit)) units.set(unitKey, unit);
+        }
+      }
+    }
+    const legacyKeys = keys.filter(key => key.startsWith(UNIT_KEY_PREFIX));
+    if (!legacyKeys.length) return;
+    const legacyByBucket = new Map();
+    for (const key of legacyKeys) {
+      const unitKey = key.slice(UNIT_KEY_PREFIX.length);
+      const value = await storage.get(key);
+      if (validUnit(value)) {
+        const existing = units.get(unitKey);
+        if (!existing || (value.readAt ?? 0) > (existing.readAt ?? 0)) {
+          units.set(unitKey, value);
+        }
+      }
+      const idx = bucketIndex(unitKey);
+      let list = legacyByBucket.get(idx);
+      if (!list) { list = []; legacyByBucket.set(idx, list); }
+      list.push(key);
+    }
+    // Free all legacy per-unit slots first so an index already at Orca's 1024-key limit
+    // (even with concurrent channel cache writes) can consolidate cleanly into buckets.
+    for (const legacyKey of legacyKeys) {
+      await storage.delete(legacyKey).catch(() => {});
+    }
+    const minDay = dayKeyAgo(now(), HISTORY_DAYS - 1);
+    for (const idx of legacyByBucket.keys()) {
+      try { await writeBucket(idx, minDay); }
+      catch (error) { log(`统计索引迁移写入失败：${error?.message ?? 'unknown'}`); }
     }
   }
 
@@ -206,13 +387,15 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     const { descriptors, coveredRemoteScopes } = Array.isArray(discovery)
       ? { descriptors: discovery, coveredRemoteScopes: new Set() }
       : discovery;
+    if (coveredRemoteScopes instanceof Set) lastCoveredRemoteScopes = new Set(coveredRemoteScopes);
     const wanted = new Set(descriptors.map(descriptor => descriptor.key));
+    const dirtyBuckets = new Set();
     for (const key of [...units.keys()]) {
       signal?.throwIfAborted();
       if (wanted.has(key)) continue;
       if (key.startsWith(REMOTE_USAGE_PREFIX) && !coveredRemoteScopes.has(key.slice(0, key.lastIndexOf(':') + 1))) continue;
       units.delete(key);
-      await storage.delete(UNIT_KEY_PREFIX + key).catch(() => {});
+      dirtyBuckets.add(bucketIndex(key));
     }
     // A large file that is still being written is re-read at most every LARGE_UNIT_INTERVAL_MS; until then the
     // last read stays in effect and counts as up to date.
@@ -257,28 +440,35 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
       if (!days) throw new Error('remote_usage_unavailable');
       return days;
     }
-    for (const descriptor of selected) {
-      signal?.throwIfAborted();
-      let unit;
-      try {
-        unit = { stamp: descriptor.stamp, days: await readDays(descriptor), readAt: now(), schema: USAGE_SCHEMA };
-      } catch (error) {
+    try {
+      for (const descriptor of selected) {
         signal?.throwIfAborted();
-        // Keep the last successful counts and retry even when a transient failure leaves the file unchanged.
-        // Persist the retry deadline as well, so a worker restart cannot turn the failure into an empty success.
-        const current = units.get(descriptor.key);
-        const failures = current?.failedStamp === descriptor.stamp ? Math.min((current.failures ?? 0) + 1, 7) : 1;
-        unit = {
-          ...current, stamp: current?.stamp ?? '', days: current?.days ?? {},
-          failed: true, failedStamp: descriptor.stamp, failures,
-          retryAt: now() + Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** (failures - 1))
-        };
-        log(`统计读取失败（${error?.code ?? error?.message ?? 'unknown'}）`);
+        let unit;
+        try {
+          unit = { stamp: descriptor.stamp, days: await readDays(descriptor), readAt: now(), schema: USAGE_SCHEMA };
+        } catch (error) {
+          signal?.throwIfAborted();
+          // Keep the last successful counts and retry even when a transient failure leaves the file unchanged.
+          // Persist the retry deadline as well, so a worker restart cannot turn the failure into an empty success.
+          const current = units.get(descriptor.key);
+          const failures = current?.failedStamp === descriptor.stamp ? Math.min((current.failures ?? 0) + 1, 7) : 1;
+          unit = {
+            ...current, stamp: current?.stamp ?? '', days: current?.days ?? {},
+            failed: true, failedStamp: descriptor.stamp, failures,
+            retryAt: now() + Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** (failures - 1))
+          };
+          log(`统计读取失败（${error?.code ?? error?.message ?? 'unknown'}）`);
+        }
+        signal?.throwIfAborted();
+        units.set(descriptor.key, unit);
+        dirtyBuckets.add(bucketIndex(descriptor.key));
+        if (dirtyBuckets.size >= 8) {
+          await flushBuckets(dirtyBuckets);
+          dirtyBuckets.clear();
+        }
       }
-      signal?.throwIfAborted();
-      units.set(descriptor.key, unit);
-      try { await storage.set(UNIT_KEY_PREFIX + descriptor.key, unit); }
-      catch (error) { log(`统计索引写入失败：${error?.message ?? 'unknown'}`); }
+    } finally {
+      await flushBuckets(dirtyBuckets);
     }
     progress = {
       done: descriptors.filter(descriptor => !needsRead(descriptor) || deferred(descriptor)).length,
@@ -293,5 +483,14 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     return { updatedAt, progress, windows: summarizeUsage(dayMaps, nowMs), daily: dailySeries(dayMaps, nowMs) };
   }
 
-  return { refresh, summary, ready };
+  function ladderSnapshot({ localScopeId = null } = {}) {
+    const nowMs = now();
+    const { localTotals, scopedDays } = summarizeLadder(units.entries(), nowMs, {
+      localScopeId,
+      coveredRemoteScopes: lastCoveredRemoteScopes
+    });
+    return { updatedAt, progress, localTotals, scopedDays };
+  }
+
+  return { refresh, summary, ladderSnapshot, ready };
 }
