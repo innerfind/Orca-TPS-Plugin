@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-catalog.v2.schema.json",
   "catalogVersion": 2,
-  "name": "Orca 软件 Tokens 统计插件",
+  "name": "Tokens统计插件",
   "owner": "jecyxyf",
   "plugins": [
     {
@@ -18,11 +18,11 @@
       "releases": [
         {
           "version": "1.6.0",
-          "commit": "5faeea42acc1b0a3746727dea88a80964c5489b1",
-          "contentHash": "9f3d12958dd4cfb6d4c59fc0866c27fc8ba1f3e84b7291d23e517824c0517434",
+          "commit": "246fc5841c6a0919c639ac0527035ebeabd00302",
+          "contentHash": "643cc0be840f336a7b258f108c1a4e3c355fe9b5475843bd94fa469007ff7ead",
           "execution": "trusted-worker",
           "minimumOrca": "1.4.251",
-          "name": "Orca 软件 Tokens 统计插件",
+          "name": "Tokens统计插件",
           "contributes": [
             {
               "kind": "panels",
@@ -45,7 +45,7 @@
           "images": {
             "icon": {
               "path": "assets/icon.png",
-              "alt": "Orca 软件 Tokens 统计插件",
+              "alt": "Tokens统计插件",
               "sha256": "8e1501049b18c550b66ffcc02843db683d5752d3816cd719893a737f34e27a15",
               "width": 256,
               "height": 256
