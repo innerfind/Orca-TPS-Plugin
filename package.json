@@ -1,7 +1,7 @@
 {
   "name": "orca-tps-stats",
-  "version": "1.6.1",
-  "description": "Live request speed, personal token usage, and GitHub leaderboards with multi-device totals for Orca IDE.",
+  "version": "1.6.2",
+  "description": "Track live request speed and token usage in Orca. Compare models, spot daily trends, and join a cross-device leaderboard with GitHub sign-in.",
   "private": true,
   "type": "module",
   "author": {

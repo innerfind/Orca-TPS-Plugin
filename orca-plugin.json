@@ -3,56 +3,38 @@
   "manifestVersion": 2,
   "id": "tps-stats",
   "name": "TPS Plugion",
-  "version": "1.6.1",
-  "description": "Live request speed, personal token usage, and GitHub leaderboards with multi-device totals for Orca IDE.",
+  "version": "1.6.2",
+  "description": "Track live request speed and token usage in Orca. Compare models, spot daily trends, and join a cross-device leaderboard with GitHub sign-in.",
   "author": {
     "name": "jecyxyf",
     "url": "https://github.com/jecyxyf"
   },
   "license": "MIT",
   "repository": "https://github.com/jecyxyf/Orca-TPS-Plugin",
-  "homepage": "https://github.com/jecyxyf/Orca-TPS-Plugin",
+  "homepage": "https://github.com/jecyxyf/Orca-TPS-Plugin#readme",
   "icon": "assets/icon.png",
   "cover": {
-    "path": "assets/1.6.1/cover.png",
-    "alt": "TPS Plugion showing the Current Data, Personal Stats, and Leaderboard tabs"
+    "path": "assets/1.6.2/cover.png",
+    "alt": "The three TPS Plugion tabs in the Orca sidebar: Current Data, Personal Stats, and Leaderboard"
   },
   "screenshots": [
     {
-      "path": "assets/1.6.1/screenshot-dark.png",
-      "alt": "Dark Current Data tab with request speed, first-token time, output, and cache hit rate",
-      "caption": "当前数据 · 逐条查看实时 TPS、首字延迟和缓存命中率",
+      "path": "assets/1.6.2/current-data.png",
+      "alt": "Orca sidebar request cards showing generation speed, first-token latency, output, and cache hit rate",
+      "caption": "Current Data · Check how each AI request ran",
       "theme": "dark"
     },
     {
-      "path": "assets/1.6.1/screenshot-light.png",
-      "alt": "Light request cards with labels for proxy timing and estimates",
-      "caption": "请求明细 · 浅色主题下区分代理记录和日志估算",
-      "theme": "light"
-    },
-    {
-      "path": "assets/1.6.1/screenshot-usage.png",
-      "alt": "Dark Personal Stats tab with daily totals, request count, and usage by model",
-      "caption": "个人统计 · 今日、近 7 天和近 30 天的用量与模型明细",
+      "path": "assets/1.6.2/personal-stats.png",
+      "alt": "Personal Stats shows usage by model, average generation speeds, and an annual heatmap",
+      "caption": "Personal Stats · Compare model usage and explore daily trends",
       "theme": "dark"
     },
     {
-      "path": "assets/1.6.1/screenshot-activity.png",
-      "alt": "Light model speed chart and yearly usage heatmap",
-      "caption": "用量热力图 · 回顾全年用量，比较模型平均速度",
-      "theme": "light"
-    },
-    {
-      "path": "assets/1.6.1/screenshot-leaderboard.png",
-      "alt": "Dark Leaderboard tab showing three medals and automatic upload controls",
-      "caption": "天梯榜 · 个人排名、奖牌和自动上传设置",
+      "path": "assets/1.6.2/leaderboard.png",
+      "alt": "Leaderboard with GitHub avatars, three ranking periods, medals, and the sync controls",
+      "caption": "Leaderboard · See your rank across devices and track your next sync",
       "theme": "dark"
-    },
-    {
-      "path": "assets/1.6.1/screenshot-period-ranking.png",
-      "alt": "Light seven-day rankings with gold, silver, and bronze medals",
-      "caption": "累计排名 · 切换今日、近 7 天和近 30 天榜单",
-      "theme": "light"
     }
   ],
   "engines": {
@@ -66,7 +48,7 @@
     "panels": [
       {
         "id": "history",
-        "title": "Conversation TPS",
+        "title": "TPS Plugin",
         "icon": "activity",
         "entry": "src/panel.html",
         "ui": "html"
@@ -75,7 +57,7 @@
     "commands": [
       {
         "id": "tps.refresh",
-        "title": "Refresh Conversation TPS"
+        "title": "Refresh TPS Data"
       }
     ],
     "statusBarItems": [
@@ -83,7 +65,7 @@
         "id": "speed",
         "text": "🚀 — tokens/s · 🍪 Cache hit —",
         "tone": "success",
-        "tooltip": "Latest request speed and cache hit rate. Open Conversation TPS for details or click to refresh.",
+        "tooltip": "Latest request speed and cache hit rate. Open TPS Plugin for details or click to refresh.",
         "command": "tps.refresh"
       }
     ]
