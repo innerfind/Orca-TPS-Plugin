@@ -16,7 +16,9 @@ export function defaultRoots({ home = homedir(), env = process.env, platform = p
       claude: [join(env.CLAUDE_CONFIG_DIR || join(home, '.claude'), 'projects'), join(home, '.claude', 'projects')],
       opencode: [env.OPENCODE_DB && env.OPENCODE_DB !== ':memory:' ? path.isAbsolute(env.OPENCODE_DB) ? env.OPENCODE_DB : join(data, 'opencode', env.OPENCODE_DB) : join(data, 'opencode', 'opencode.db')],
       pi: [join(env.PI_CODING_AGENT_DIR || join(home, '.pi', 'agent'), 'sessions')],
-      antigravity: [join(home, '.gemini', 'antigravity-cli', 'brain')]
+      antigravity: [join(home, '.gemini', 'antigravity-cli', 'brain')],
+      hermes: [env.HERMES_HOME, ...(platform === 'win32' ? [join(env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'hermes')] : []),
+        join(home, '.hermes')].filter(Boolean)
     },
     userData,
     ccSwitchDb
@@ -25,7 +27,7 @@ export function defaultRoots({ home = homedir(), env = process.env, platform = p
 
 export async function configuredRoots(custom = {}, includeDefaults = true) {
   const defaults = defaultRoots(), roots = {};
-  for (const provider of ['codex', 'claude', 'opencode', 'pi', 'antigravity']) {
+  for (const provider of ['codex', 'claude', 'opencode', 'pi', 'antigravity', 'hermes']) {
     const values = Array.isArray(custom[provider]) ? custom[provider] : [];
     roots[provider] = [...new Set([...(includeDefaults ? defaults.roots[provider] : []), ...values]
       .filter(value => typeof value === 'string' && value.trim())

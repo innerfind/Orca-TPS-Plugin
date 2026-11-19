@@ -675,6 +675,11 @@
         }
         if (session) {
           if (!numeric(record?.durationMs) || record.durationMs <= 0) return '缺少有效请求耗时';
+          if (record.dataSource === 'hermes_log') {
+            if (numeric(record.outputTokens) && record.outputTokens < 20) return '输出不足 20 Token，不估算 Hermes 速度';
+            if (record.durationMs < 300) return '请求耗时不足 300 毫秒，不估算 Hermes 速度';
+            return '速度未知';
+          }
           if (numeric(record.outputTokens) && record.outputTokens < 200) return `输出 ${outputKB(record.outputTokens)} KB < 0.2 KB（CC Switch 日志估算门槛）`;
           if (record.durationMs < 1000) return `请求耗时 ${record.durationMs}ms < 1s（CC Switch 日志估算门槛）`;
         }
@@ -699,14 +704,14 @@
       function recordCard(record) {
         const card = ui['record-template'].content.firstElementChild.cloneNode(true);
         const find = name => card.querySelector(`[data-testid="${name}"]`);
-        // Model stays the headline; the agent sits above it. Agents without a model (Antigravity) headline the agent instead.
         const agent = agentLabel(record.provider);
+        const hermes = record.provider === 'hermes';
         const model = typeof record.model === 'string' && record.model ? record.model : '';
-        const headline = model || agent || '模型 —';
+        const headline = model || (hermes ? '模型 —' : agent || '模型 —');
         find('model').textContent = headline;
         find('model').title = headline;
         const agentLine = find('agent');
-        agentLine.textContent = model && agent ? agent : '';
+        agentLine.textContent = (model || hermes) ? agent : '';
         agentLine.title = agentLine.textContent;
         agentLine.hidden = !agentLine.textContent;
         find('subagent-badge').hidden = !record.isSubagent;
@@ -724,6 +729,10 @@
           ttftEl.hidden = false;
           ttftEl.textContent = `· 首字 ${session ? '≈' : ''}${ttftSec}s`;
           ttftEl.title = `${session ? '估算' : '精确'}首字时间 ${record.firstTokenMs} 毫秒（${ttftSec} 秒）`;
+        } else if (hermes) {
+          ttftEl.hidden = false;
+          ttftEl.textContent = '· 首字 —';
+          ttftEl.title = 'Hermes 日志未记录首字延迟';
         }
 
         setValue(find('speed-value'), formatTps(record), speedTooltip(record));
@@ -745,7 +754,7 @@
       }
       // 用量战况: totals per window from the background index (tps.summary); counts only, never message text.
       const USAGE_REFRESH_MS = 30_000;
-      const AGENT_LABELS = { codex: 'Codex CLI', claude: 'Claude Code', opencode: 'OpenCode', opencode2: 'OpenCode', pi: 'Pi Agent', antigravity: 'Antigravity CLI' };
+      const AGENT_LABELS = { codex: 'Codex CLI', claude: 'Claude Code', opencode: 'OpenCode', opencode2: 'OpenCode', pi: 'Pi Agent', antigravity: 'Antigravity CLI', hermes: 'Hermes Agent' };
       function agentLabel(provider) {
         return AGENT_LABELS[provider || current?.activeSession?.provider] ?? '';
       }

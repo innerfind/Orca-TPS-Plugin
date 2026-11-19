@@ -8,6 +8,8 @@ export const SPEED_MIN_OUTPUT_TOKENS = 100;
 export const SPEED_MIN_GENERATION_MS = 100;
 export const SPEED_ESTIMATE_MIN_OUTPUT_TOKENS = 200;
 export const SPEED_ESTIMATE_MIN_DURATION_MS = 1000;
+const HERMES_MIN_OUTPUT_TOKENS = 20;
+const HERMES_MIN_DURATION_MS = 300;
 export const MIN_PLAUSIBLE_LATENCY_MS = 100;
 export const MAX_PLAUSIBLE_LATENCY_MS = 60 * 60 * 1000;
 export const SESSION_PROXY_DEDUP_WINDOW_SECONDS = 600;
@@ -49,7 +51,9 @@ export function computeSpeedMetrics({ outputTokens, durationMs, firstTokenMs = n
     }
     return { tokensPerSecond: null, isEstimatedSpeed: false, generationMs };
   }
-  if (output !== null && output >= SPEED_ESTIMATE_MIN_OUTPUT_TOKENS && latency !== null && latency >= SPEED_ESTIMATE_MIN_DURATION_MS) {
+  const minimumOutput = dataSource === 'hermes_log' ? HERMES_MIN_OUTPUT_TOKENS : SPEED_ESTIMATE_MIN_OUTPUT_TOKENS;
+  const minimumDuration = dataSource === 'hermes_log' ? HERMES_MIN_DURATION_MS : SPEED_ESTIMATE_MIN_DURATION_MS;
+  if (output !== null && output >= minimumOutput && latency !== null && latency >= minimumDuration) {
     const tps = output / (latency / 1000);
     if (Number.isFinite(tps) && tps > 0) {
       return { tokensPerSecond: tps, isEstimatedSpeed: true, generationMs: null };
@@ -129,6 +133,12 @@ function buildRecord({
     ...(cleanModel && cleanModel !== 'unknown' ? { model: cleanModel } : {}),
     ...(isSubagent ? { isSubagent: true } : {})
   };
+}
+
+export function buildHermesRecord({ cacheReported, ...request }) {
+  const result = buildRecord({ ...request, dataSource: 'hermes_log', cacheInclusive: true });
+  if (result && !cacheReported) delete result.cacheHitRate;
+  return result;
 }
 
 /** Newest first, de-duplicated by id. Session views keep 100; usage totals pass Infinity. */

@@ -52,6 +52,16 @@ test('platform defaults and explicit Orca data directory are portable', () => {
   assert.equal(activeProfileUserData({ env: { ORCA_USER_DATA_PATH: '/custom' } }), '/custom');
 });
 
+test('Hermes is selected by its provider session ID even when Orca reports a non-JSONL history path', () => {
+  const sample = state(), tabs = sample.tabsByWorktree[sample.activeWorktreeId];
+  tabs[0].aiVaultTitle.agent = 'hermes';
+  const pane = sample.sleepingAgentSessionsByPaneKey['a:leaf'];
+  pane.agent = 'hermes';
+  pane.providerSession.transcriptPath = '/hermes/state.db';
+  const { target } = selectActiveConversation(sample, options());
+  assert.deepEqual(target.sessions.find(item => item.provider === 'hermes'), { provider: 'hermes', sessionId: 'session-a' });
+});
+
 test('channel target collects all registered terminal tabs and split panes in the active worktree without leaking prompts', () => {
   const s = state(), o = options();
   // Add a split pane inside tab 'a' as well
