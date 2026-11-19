@@ -4,8 +4,8 @@ import { mkdtemp, writeFile, mkdir, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  BACKFILL_UNITS, UNIT_KEY_PREFIX, USAGE_SCHEMA, accumulateRecords, createUsageIndex, dayKeyAgo, leaderboardDay,
-  localDayKey, realTokens, summarizeUsage, usageCutoffMs
+  BACKFILL_UNITS, UNIT_KEY_PREFIX, USAGE_BUCKET_COUNT, USAGE_SCHEMA, accumulateRecords, bucketIndex, bucketStorageKey,
+  createUsageIndex, dayKeyAgo, leaderboardDay, localDayKey, realTokens, summarizeUsage, usageCutoffMs
 } from '../src/usage-summary.mjs';
 import { discoverUsageUnits } from '../src/data.mjs';
 import { createComputation } from '../src/computation.mjs';
@@ -73,6 +73,12 @@ function fakeStorage() {
   };
 }
 
+/** Reads a unit back from the bucket layout the index writes. */
+function unitInStorage(storage, unitKey) {
+  const bucket = storage.map.get(bucketStorageKey(bucketIndex(unitKey)));
+  return bucket?.units?.[unitKey];
+}
+
 test('index re-reads only changed units, respects the byte budget, and replaces rather than adds', async () => {
   const now = at(2026, 11, 8, 9), today = localDayKey(now);
   const storage = fakeStorage(), reads = [];
@@ -107,7 +113,7 @@ test('index re-reads only changed units, respects the byte budget, and replaces 
   units = [unit('a', 's2', 300, { mtimeMs: 4 })];
   await index.refresh();
   assert.equal(index.summary().windows.today.tokens, 300, 'units that left the window are dropped');
-  assert.equal(storage.map.has(`${UNIT_KEY_PREFIX}b`), false);
+  assert.equal(unitInStorage(storage, 'b'), undefined, 'a unit that left the window is dropped from storage');
 });
 
 test('index survives restart from storage without immediately retrying failed units', async () => {
@@ -476,8 +482,66 @@ test('index units stored before speed counters keep their totals, are re-read on
   assert.deepEqual(reads, ['old']);
   assert.equal(index.summary().windows.today.tokens, 150);
   assert.equal(index.summary().windows.today.speeds[0].tokensPerSecond, 120);
-  assert.equal(storage.map.get(`${UNIT_KEY_PREFIX}old`).schema, USAGE_SCHEMA);
+  assert.equal(unitInStorage(storage, 'old').schema, USAGE_SCHEMA);
 
   await index.refresh();
   assert.deepEqual(reads, ['old'], 'a current-schema unit is not read again');
+});
+
+test('units are stored in a fixed number of buckets so the storage key limit is never reached', async () => {
+  const now = at(2026, 11, 8, 9), today = localDayKey(now);
+  const storage = fakeStorage();
+  const units = Array.from({ length: 1500 }, (_, index) => ({
+    key: `unit-${index}`, stamp: `s${index}`, bytes: 10, mtimeMs: index,
+    read: async () => ({ [today]: { codex: { 'gpt-6-astra': [1, 10, 0, 0, 0] } } })
+  }));
+  const index = createUsageIndex({ storage, discover: async () => units, now: () => now });
+  await index.refresh();
+
+  const keys = await storage.keys();
+  assert.ok(keys.length <= USAGE_BUCKET_COUNT, `expected at most ${USAGE_BUCKET_COUNT} keys, got ${keys.length}`);
+  assert.equal(keys.some(key => key.startsWith(UNIT_KEY_PREFIX)), false, 'no unit keeps its own key');
+  assert.equal(index.summary().windows.today.requests, 1500, 'every unit still counts toward the totals');
+});
+
+test('legacy per-unit keys are migrated into buckets and then removed', async () => {
+  const now = at(2026, 11, 8, 9), today = localDayKey(now);
+  const storage = fakeStorage();
+  await storage.set(`${UNIT_KEY_PREFIX}legacy-a`, { stamp: 's1', readAt: 1, schema: USAGE_SCHEMA, days: { [today]: { claude: { 'claude-opus-5-5': [2, 100, 50, 0, 0] } } } });
+  await storage.set(`${UNIT_KEY_PREFIX}legacy-b`, { stamp: 's2', readAt: 1, schema: USAGE_SCHEMA, days: { [today]: { claude: { 'claude-opus-5-5': [1, 20, 10, 0, 0] } } } });
+
+  const index = createUsageIndex({ storage, discover: async () => [], now: () => now });
+  await index.ready();
+
+  const keys = await storage.keys();
+  assert.equal(keys.some(key => key.startsWith(UNIT_KEY_PREFIX)), false, 'legacy keys are deleted');
+  assert.equal(keys.length, 2, 'the two units land in two buckets');
+  assert.equal(index.summary().windows.today.tokens, 180, 'migrated totals are kept');
+  assert.equal(unitInStorage(storage, 'legacy-a').stamp, 's1');
+  assert.equal(unitInStorage(storage, 'legacy-b').stamp, 's2');
+});
+
+test('a store that already reached the key limit frees the legacy keys before writing the buckets', async () => {
+  const now = at(2026, 11, 8, 9), today = localDayKey(now);
+  const map = new Map();
+  let limit = 3;
+  const storage = {
+    map,
+    async keys() { return [...map.keys()]; },
+    async get(key) { return map.has(key) ? structuredClone(map.get(key)) : null; },
+    async set(key, value) {
+      if (!map.has(key) && map.size >= limit) throw new Error('storage exceeds the 1024-key limit');
+      map.set(key, structuredClone(value));
+    },
+    async delete(key) { map.delete(key); }
+  };
+  // A store that is already full: the legacy keys plus filler that the index does not own.
+  await storage.set(`${UNIT_KEY_PREFIX}legacy`, { stamp: 's1', readAt: 1, schema: USAGE_SCHEMA, days: { [today]: { claude: { 'claude-opus-5-5': [2, 100, 50, 0, 0] } } } });
+  await storage.set('filler-1', 1);
+  await storage.set('filler-2', 1);
+  limit = 3;
+
+  const index = createUsageIndex({ storage, discover: async () => [], now: () => now });
+  await index.ready();
+  assert.equal(index.summary().windows.today.tokens, 150, 'the legacy totals survive the migration');
 });

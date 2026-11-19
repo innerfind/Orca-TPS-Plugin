@@ -5,6 +5,10 @@ import { sourceMessage } from './locales.mjs';
 
 export const UNIT_KEY_PREFIX = 'usage:unit:';
 export const REMOTE_USAGE_PREFIX = 'remote:';
+// Orca caps a plugin's own storage at 1024 keys. A machine with many session files produces one unit per
+// file, so the units are compacted into a fixed number of hashed buckets instead of one key each.
+export const USAGE_BUCKET_PREFIX = 'usage:b:';
+export const USAGE_BUCKET_COUNT = 64;
 export const USAGE_READ_BATCH = 16;
 export const BACKFILL_BYTES = 16 * 1024 * 1024;
 export const BACKFILL_UNITS = 8;
@@ -185,6 +189,50 @@ function addCounters(target, cell) {
 
 const validUnit = value => value && typeof value === 'object' && typeof value.stamp === 'string' && value.days && typeof value.days === 'object';
 
+/** Stable bucket for a unit key, so the same unit always lands in the same bucket. */
+export function bucketIndex(key) {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) % USAGE_BUCKET_COUNT;
+}
+
+export const bucketStorageKey = index => `${USAGE_BUCKET_PREFIX}${String(index).padStart(2, '0')}`;
+
+/** Drops day entries older than the history window so buckets keep a year of counts, not more. */
+function pruneDays(days, minDay) {
+  if (!days || typeof days !== 'object') return {};
+  const pruned = {};
+  for (const [day, byProvider] of Object.entries(days)) {
+    if (day >= minDay && byProvider && typeof byProvider === 'object' && Object.keys(byProvider).length > 0) {
+      pruned[day] = byProvider;
+    }
+  }
+  return pruned;
+}
+
+/** Keeps only the fields the index needs; the leaderboard ranking fields are kept so rankings survive a restart. */
+function compactUnit(unit, minDay) {
+  const clean = {
+    stamp: unit.stamp,
+    days: pruneDays(unit.days, minDay),
+    ...(Number.isFinite(unit.readAt) ? { readAt: unit.readAt } : {}),
+    ...(Number.isFinite(unit.schema) ? { schema: unit.schema } : {})
+  };
+  if (unit.leaderboardDays && typeof unit.leaderboardDays === 'object') clean.leaderboardDays = unit.leaderboardDays;
+  if (typeof unit.leaderboardFrom === 'string') clean.leaderboardFrom = unit.leaderboardFrom;
+  if (typeof unit.leaderboardThrough === 'string') clean.leaderboardThrough = unit.leaderboardThrough;
+  if (unit.failed) {
+    clean.failed = true;
+    if (typeof unit.failedStamp === 'string') clean.failedStamp = unit.failedStamp;
+    if (Number.isFinite(unit.failures)) clean.failures = unit.failures;
+    if (Number.isFinite(unit.retryAt)) clean.retryAt = unit.retryAt;
+  }
+  return clean;
+}
+
 /**
  * Incremental index. `discover(cutoffMs)` returns unit descriptors:
  * { key, stamp, bytes, mtimeMs, read: async () => days }. Changed units are read newest first until the byte
@@ -235,10 +283,53 @@ export function createUsageIndex({
   }
 
   async function load() {
-    const keys = (await storage.keys()).filter(key => key.startsWith(UNIT_KEY_PREFIX));
-    for (const key of keys) {
+    const keys = await storage.keys();
+    // Units live in hashed buckets; legacy per-unit keys are migrated once and then deleted.
+    const bucketKeys = keys.filter(key => key.startsWith(USAGE_BUCKET_PREFIX));
+    for (const key of bucketKeys) {
       const value = await storage.get(key);
-      if (validUnit(value)) setUnit(key.slice(UNIT_KEY_PREFIX.length), undefined, value);
+      if (!value || typeof value !== 'object' || !value.units) continue;
+      for (const [unitKey, unit] of Object.entries(value.units)) {
+        if (validUnit(unit)) setUnit(unitKey, undefined, unit);
+      }
+    }
+    const legacyKeys = keys.filter(key => key.startsWith(UNIT_KEY_PREFIX));
+    if (legacyKeys.length) await migrateLegacy(legacyKeys);
+  }
+
+  // A store that already reached the key limit cannot take another key before the old ones are freed, so the
+  // legacy keys are deleted before the consolidated buckets are written.
+  async function migrateLegacy(legacyKeys) {
+    const minDay = dayKeyAgo(now(), HISTORY_DAYS - 1);
+    for (const key of legacyKeys) {
+      const value = await storage.get(key).catch(() => undefined);
+      if (validUnit(value)) {
+        const unitKey = key.slice(UNIT_KEY_PREFIX.length);
+        if (!units.has(unitKey)) setUnit(unitKey, undefined, value);
+      }
+      await storage.delete(key).catch(() => {});
+    }
+    await writeBuckets(minDay);
+  }
+
+  /** Writes every unit into its bucket and drops buckets that no longer hold a unit. */
+  async function writeBuckets(minDay) {
+    const buckets = new Map();
+    for (const [key, unit] of units) {
+      const index = bucketIndex(key);
+      const bucket = buckets.get(index) ?? { v: 1, units: {} };
+      bucket.units[key] = compactUnit(unit, minDay);
+      buckets.set(index, bucket);
+    }
+    const existing = new Set((await storage.keys()).filter(key => key.startsWith(USAGE_BUCKET_PREFIX)));
+    for (const [index, bucket] of buckets) {
+      const key = bucketStorageKey(index);
+      try { await storage.set(key, bucket); }
+      catch (error) { log(sourceMessage('notice.usage-index-write-failed', error?.message ?? 'unknown')); }
+      existing.delete(key);
+    }
+    for (const key of existing) {
+      await storage.delete(key).catch(() => {});
     }
   }
 
@@ -269,7 +360,6 @@ export function createUsageIndex({
       const remote = key.startsWith(REMOTE_USAGE_PREFIX);
       if (remote ? !coveredRemoteScopes.has(key.slice(0, key.lastIndexOf(':') + 1)) : !localComplete) continue;
       setUnit(key, units.get(key));
-      await storage.delete(UNIT_KEY_PREFIX + key).catch(() => {});
     }
     const missingToday = (descriptor, current) => descriptor.mtimeMs >= rankStart &&
       (current?.leaderboardThrough ?? current?.leaderboardFrom) !== rankDay;
@@ -354,9 +444,9 @@ export function createUsageIndex({
       }
       signal?.throwIfAborted();
       setUnit(descriptor.key, units.get(descriptor.key), unit);
-      try { await storage.set(UNIT_KEY_PREFIX + descriptor.key, unit); }
-      catch (error) { log(sourceMessage('notice.usage-index-write-failed', error?.message ?? 'unknown')); }
     }
+    // Units are written as buckets, so one storage key holds many units and the 1024-key cap is never reached.
+    await writeBuckets(dayKeyAgo(refreshAt, HISTORY_DAYS - 1));
     progress = {
       done: descriptors.filter(descriptor => !needsRead(descriptor) || deferred(descriptor)).length,
       total: descriptors.length
