@@ -77,35 +77,17 @@ Windows 和 Linux 需使用 **Orca 1.4.251 或更新版本**。采集 SSH 工作
 
 ### Orca 插件目录
 
-在 Orca 插件目录中找到 **TPS Plugion**，查看所需权限后安装。 [查看插件条目](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)
-
-### Git 仓库安装
-
-要安装 GitHub 主分支的版本，可运行下面的命令，再按 Orca 提示确认权限。
-
-```sh
-orca plugin install https://github.com/jecyxyf/Orca-TPS-Plugin.git --ref main
-```
+打开 **Orca → 设置 → 插件**，搜索 **TPS**，找到 **jecyxyf** 发布的条目。点击**安装**并确认权限，Orca 会自动下载。[查看插件条目](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)
 
 ### 本地安装
 
-**Windows（PowerShell）**
-
-```powershell
-git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git "$env:USERPROFILE\Applications\orca-tps-plugin"
-Set-Location "$env:USERPROFILE\Applications\orca-tps-plugin"
-./install-windows.ps1
-```
-
-**Linux**
+克隆这个仓库到本地。
 
 ```sh
-git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git ~/Applications/orca-tps-plugin
-cd ~/Applications/orca-tps-plugin
-sh install-linux.sh
+git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git
 ```
 
-如果 Orca CLI 不在 PATH 中，运行 Linux 安装脚本时可通过 ORCA_CLI 指定它的完整路径。本地加载期间请保留克隆目录。
+在 **Orca → 设置 → 插件 → 开发目录（Development folders…）** 中，添加包含 `orca-plugin.json` 的克隆目录。确认权限后启用插件，使用期间保留这个目录。
 
 安装后，在 Orca 右侧栏打开 **TPS Plugin**。
 
