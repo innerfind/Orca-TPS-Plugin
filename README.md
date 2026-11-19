@@ -1,4 +1,4 @@
-# TPS Plugion
+# TPS Plugin
 
 **English** · **[简体中文](./README.zh-CN.md)** · **[Orca plugin directory](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)**
 
@@ -8,7 +8,7 @@
 
 ## 1. Project description
 
-TPS Plugion brings token usage and generation speed to the Orca sidebar. See what the current session is doing, review your usage over time, or join the leaderboard with a GitHub account.
+TPS Plugin brings token usage and generation speed to the Orca sidebar. See what the current session is doing, review your usage over time, or join the leaderboard with a GitHub account.
 
 The plugin supports local and SSH workspaces and remembers your choice of 10 interface languages. Conversation logs are read in place. The leaderboard receives usage totals.
 
@@ -18,7 +18,7 @@ Open **TPS Plugin** in Orca’s right sidebar to switch between **Current Data**
 
 <p align="center">
   <a href="./assets/readme/en/overview.png" title="View full-size screenshot">
-    <img src="./assets/readme/en/overview.webp" width="640" alt="TPS Plugion overview with all three tabs in English">
+    <img src="./assets/readme/en/overview.webp" width="640" alt="TPS Plugin overview with all three tabs in English">
   </a>
 </p>
 
@@ -43,6 +43,7 @@ Open **TPS Plugin** in Orca’s right sidebar to switch between **Current Data**
 - Review usage and request counts for today, the last 7 days, or the last 30 days.
 - Break down usage by tool and model, and compare average model generation speeds. Usage in MB includes new input, output, cache reads, and cache writes.
 - Use the annual heatmap to see daily activity over the past year.
+- Usage history is cached locally and restored when Orca restarts.
 
 <p align="center">
   <a href="./assets/readme/en/personal-stats.png" title="View full-size screenshot">
