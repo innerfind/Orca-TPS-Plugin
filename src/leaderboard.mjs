@@ -12,6 +12,8 @@ const RANKING_CACHE = 'leaderboard:ranking';
 const DEFAULT_ENDPOINT = 'https://43.157.2.14';
 const LOGIN_TIMEOUT = 10 * 60 * 1000;
 const LOGIN_POLL = 2000;
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
+const LOGOUT_RETRY = 15_000;
 const DEFAULT_UPLOAD_INTERVAL = 60;
 const MIN_UPLOAD_INTERVAL = 10_000;
 const validInterval = seconds => Number.isSafeInteger(seconds) && seconds >= 10 && Number.isSafeInteger(seconds * 1000);
@@ -45,6 +47,7 @@ export function startLeaderboard(orca, {
   let username = '', accountWrite = Promise.resolve(), sessionProblem = '';
   let uploadStatus, banned = false;
   const revocations = new Map();
+  let credentialStorageFailed = false;
   let historyJob, historyWrite = Promise.resolve(), historyProblem = '';
   const rankingCaches = new Map();
   let rankingRequest = 0;
@@ -102,7 +105,7 @@ export function startLeaderboard(orca, {
     const tasks = [orca.storage.get(UPLOAD), readHistory ? orca.storage.get(HISTORY) : undefined, orca.storage.get(ACCOUNT_CACHE)];
     if (secretAvailable('secrets.get')) tasks.push(host.call('secrets.get', { key: SECRET }));
     const [setting, history, account, saved] = await Promise.allSettled(tasks);
-    if (tokenPattern.test(saved?.value?.value ?? '')) token = saved.value.value;
+    restoreCredentials(saved?.value?.value);
     const cached = account.value;
     if (token && cached?.origin === base.origin && cached.session === sessionKey(token) && validUsername(cached.username)) {
       username = cached.username;
@@ -114,6 +117,30 @@ export function startLeaderboard(orca, {
       historyJob = { next: 0 };
     }
   })();
+
+  function restoreCredentials(value) {
+    if (typeof value !== 'string') return;
+    // Earlier installs stored the active token as a plain string in this same secret.
+    if (tokenPattern.test(value)) {
+      token = value;
+      return;
+    }
+    let saved;
+    try { saved = JSON.parse(value); }
+    catch { return; }
+    if (saved?.origin !== base.origin) return;
+    const time = now().getTime();
+    if (Array.isArray(saved.pending)) {
+      for (const entry of saved.pending) {
+        if (typeof entry?.token === 'string' && tokenPattern.test(entry.token) &&
+            Number.isSafeInteger(entry.expiresAt) && entry.expiresAt > time) {
+          revocations.set(entry.token, { expiresAt: entry.expiresAt, retryAt: 0 });
+        }
+      }
+    }
+    if (typeof saved.token === 'string' && tokenPattern.test(saved.token) && !revocations.has(saved.token)) token = saved.token;
+    if (Array.isArray(saved.pending) && saved.pending.length !== revocations.size) void persistCredentials();
+  }
 
   function rememberUsername(value) {
     if (value === username) return;
@@ -140,6 +167,26 @@ export function startLeaderboard(orca, {
     await saveUpload().catch(() => {});
   }
 
+  function persistCredentials() {
+    const pending = [...revocations].map(([token, { expiresAt }]) => ({ token, expiresAt }));
+    const operation = token || pending.length ? 'secrets.set' : 'secrets.delete';
+    const payload = { key: SECRET };
+    if (operation === 'secrets.set') payload.value = JSON.stringify({ origin: base.origin, token, pending });
+    credentialWrite = credentialWrite.then(async () => {
+      if (!secretAvailable(operation)) {
+        credentialStorageFailed = true;
+        return;
+      }
+      try {
+        await host.call(operation, payload);
+        credentialStorageFailed = false;
+      } catch {
+        credentialStorageFailed = true;
+      }
+    });
+    return credentialWrite;
+  }
+
   async function saveToken(value, problem = '') {
     const changed = token !== value;
     token = value;
@@ -154,13 +201,7 @@ export function startLeaderboard(orca, {
       historyProblem = '';
       reset = stopUpload();
     }
-    const operation = value ? 'secrets.set' : 'secrets.delete';
-    if (!secretAvailable(operation)) return reset;
-    credentialWrite = credentialWrite.then(async () => {
-      await reset;
-      await host.call(operation, value ? { key: SECRET, value } : { key: SECRET });
-    }).catch(() => { /* The current session still works if the OS keyring is unavailable. */ });
-    return credentialWrite;
+    await Promise.all([reset, persistCredentials()]);
   }
 
   async function request(path, { body, auth = true, credential = auth ? token : '', requestId } = {}) {
@@ -221,6 +262,7 @@ export function startLeaderboard(orca, {
     }
     return {
       days, board: { ...board, authenticated: signedIn }, updatedAt, signedIn, sessionProblem,
+      logoutPending: revocations.size > 0, logoutStorageFailed: revocations.size > 0 && credentialStorageFailed,
       upload,
       nextAutomaticAt: upload.enabled ? Math.max(nextAttempt, board.nextUploadAt ?? 0, board.lockedUntil ?? 0) : null,
       uploading: Boolean(submitting), lastUpload, initializing: Boolean(historyJob), historyProblem
@@ -279,14 +321,28 @@ export function startLeaderboard(orca, {
 
   function revokeSessions() {
     if (lifetime.signal.aborted) return;
-    for (const [credential, due] of revocations) {
-      if (due > now().getTime()) continue;
-      revocations.set(credential, Infinity);
+    const time = now().getTime();
+    let persist = false;
+    for (const [credential, pending] of revocations) {
+      if (pending.expiresAt <= time) {
+        revocations.delete(credential);
+        persist = true;
+        continue;
+      }
+      if (pending.retryAt > time) continue;
+      persist ||= credentialStorageFailed;
+      pending.retryAt = Infinity;
       void request('/api/auth/logout', { auth: false, credential, body: {} }).then(result => {
-        if (result.ok || result.code === 'login_required') revocations.delete(credential);
-        else revocations.set(credential, now().getTime() + 15_000);
+        if (lifetime.signal.aborted || revocations.get(credential) !== pending) return;
+        if (result.ok === true || result.code === 'login_required') {
+          revocations.delete(credential);
+          void persistCredentials();
+        } else {
+          pending.retryAt = now().getTime() + LOGOUT_RETRY;
+        }
       });
     }
+    if (persist) void persistCredentials();
   }
 
   function submit(preview, stillEnabled = () => true) {
@@ -405,12 +461,13 @@ export function startLeaderboard(orca, {
         login = undefined;
         sessionProblem = '';
         const credential = token;
-        const clearing = saveToken('');
-        if (credential) {
-          revocations.set(credential, 0);
+        const pending = credential ? { expiresAt: now().getTime() + SESSION_MAX_AGE, retryAt: Infinity } : null;
+        if (pending) revocations.set(credential, pending);
+        await saveToken('');
+        if (pending) {
+          pending.retryAt = 0;
           revokeSessions();
         }
-        await clearing;
         return { code: 'signed_out', ...panelState(days) };
       }
       case 'submit': {
@@ -439,7 +496,7 @@ export function startLeaderboard(orca, {
     }
   });
   function tick() {
-    revokeSessions();
+    void ready.then(revokeSessions);
     void runScheduled().catch(() => {});
     void runHistoryInitialization().catch(() => {});
   }
