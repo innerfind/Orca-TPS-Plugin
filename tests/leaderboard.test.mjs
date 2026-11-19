@@ -15,6 +15,8 @@ import { createUsageIndex, leaderboardDay, leaderboardDayStart } from '../src/us
 const ORIGIN = 'http://127.0.0.1:8787';
 const TODAY = '2026-11-18';
 const START = leaderboardDayStart(TODAY);
+const SESSION_SECRET = 'leaderboard-session';
+const savedToken = secrets => JSON.parse(secrets.get(SESSION_SECRET) ?? '{}').token;
 
 async function fixture(t, names = ['alice', 'bob']) {
   const store = openLeaderboardStore(':memory:');
@@ -468,7 +470,7 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.equal(submitted.board.tokens, 700);
   assert.deepEqual(requests.slice(beforeUpload), [{ path: '/api/today/submit', method: 'POST', authenticated: true }]);
   assert.equal((await run('state')).board.rows[0].mine, true);
-  const viewerToken = secrets.get('leaderboard-session');
+  const viewerToken = savedToken(secrets);
   assert.equal((await run('submit', { day: TODAY, tokens: 700 })).code, 'too_soon');
   assert.equal((await run('upload', { enabled: true, interval: 9 })).code, 'invalid_interval');
   api.advance(10_000);
@@ -497,21 +499,21 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   await delay(1100);
   assert.equal((await run('state')).board.tokens, 850);
   assert.equal((await run('logout')).board.authenticated, false);
-  assert.equal(secrets.size, 0);
+  assert.ok(!savedToken(secrets));
   for (let attempt = 0; attempt < 25 && (await api.get(viewerToken, '/api/today/status')).status !== 401; attempt++) await delay(20);
   assert.equal((await api.get(viewerToken, '/api/today/status')).status, 401);
 
   await api.authorizePlugin((await run('login')).loginUrl, 'bob');
   assert.equal((await run('poll')).board.username, 'bob');
   assert.equal((await run('state')).upload.enabled, false);
-  const bob = secrets.get('leaderboard-session');
+  const bob = savedToken(secrets);
   const admin = await api.websiteLogin('admin');
   await api.form('/admin/ban', admin.cookie, { account: '2', ban: '1', reason: 'test' });
   const blocked = await run('submit', { day: TODAY, tokens });
   assert.equal(blocked.code, 'banned');
   assert.equal(blocked.signedIn, true);
   assert.equal(blocked.board.banned, true);
-  assert.equal(secrets.get('leaderboard-session'), bob);
+  assert.equal(savedToken(secrets), bob);
   await api.call('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + bob } });
   assert.equal((await run('state')).signedIn, true);
   const expired = await run('submit', { day: TODAY, tokens });
@@ -607,6 +609,67 @@ test('login retries a lost authorization response and logout does not wait for t
   assert.equal((await api.get(receivedToken, '/api/today/status')).status, 401);
   assert.notEqual((await run('login')).loginUrl, firstLogin.loginUrl);
   assert.equal(rankCalls, 1);
+});
+
+test('an offline logout survives a restart and revokes only the old session', { timeout: 8000 }, async t => {
+  const api = await fixture(t);
+  const oldToken = await api.login();
+  const storage = new Map(), secrets = new Map([[SESSION_SECRET, oldToken]]);
+  let handle, offline = true, attempts = 0;
+  const orca = {
+    storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
+    host: { has: () => true, call: async (method, { key, value }) => {
+      if (method === 'secrets.get') return { value: secrets.get(key) };
+      if (method === 'secrets.set') return secrets.set(key, value);
+      if (method === 'secrets.delete') return secrets.delete(key);
+    } },
+    grantedCapabilities: ['secrets:own'],
+    panels: { handle: (_, callback) => { handle = callback; return { dispose() {} }; } }
+  };
+  const launch = () => startLeaderboard(orca, {
+    endpoint: api.endpoint, now: () => new Date(api.clock()),
+    readUsage: async () => undefined,
+    async fetcher(url, options) {
+      if (url.pathname === '/api/auth/logout') {
+        attempts++;
+        if (offline) throw new Error('Offline');
+        assert.equal(options.headers.Authorization, 'Bearer ' + oldToken);
+      }
+      return fetch(url, options);
+    }
+  });
+
+  let stop = launch();
+  t.after(() => stop());
+  const run = action => handle({ action });
+  assert.equal((await run('session')).signedIn, true);
+  const signedOut = await run('logout');
+  assert.equal(signedOut.signedIn, false);
+  assert.equal(signedOut.logoutPending, true);
+  assert.ok(!savedToken(secrets));
+  assert.ok([...secrets.values()].some(value => value.includes(oldToken)), 'pending token is kept in encrypted storage');
+  assert.ok(!JSON.stringify([...storage]).includes(oldToken), 'plain storage never holds the token');
+  stop();
+
+  stop = launch();
+  const restored = await run('session');
+  assert.equal(restored.signedIn, false);
+  assert.equal(restored.logoutPending, true);
+  assert.equal((await api.get(oldToken, '/api/today/status')).status, 200);
+
+  await api.authorizePlugin((await run('login')).loginUrl, 'bob');
+  assert.equal((await run('poll')).board.username, 'bob');
+  const newToken = savedToken(secrets);
+  assert.ok(newToken && newToken !== oldToken);
+  offline = false;
+  api.advance(16_000);
+  for (let tries = 0; tries < 60 && (await run('session')).logoutPending; tries++) await delay(30);
+  assert.ok(attempts >= 2);
+  assert.equal((await run('session')).logoutPending, false);
+  assert.equal((await api.get(oldToken, '/api/today/status')).status, 401);
+  assert.equal((await api.get(newToken, '/api/today/status')).status, 200);
+  assert.equal(savedToken(secrets), newToken);
+  assert.ok(!secrets.get(SESSION_SECRET).includes(oldToken));
 });
 
 test('login returns before initialization and the same session resumes it after a plugin restart', { timeout: 7000 }, async t => {

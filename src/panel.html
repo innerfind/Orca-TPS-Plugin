@@ -373,9 +373,12 @@
     </div>
     <section class="panel-view" id="leaderboard" role="tabpanel" aria-labelledby="tab-leaderboard" tabindex="0" hidden>
       <div class="ladder-card" id="ladder-controls" hidden>
-        <div id="ladder-sign-in" class="ladder-identity" hidden>
-          <p class="ladder-mine">未登录</p>
-          <button class="refresh ladder-control" id="ladder-login" type="button" disabled>用 GitHub 登录</button>
+        <div id="ladder-sign-in" hidden>
+          <div class="ladder-identity">
+            <p class="ladder-mine">未登录</p>
+            <button class="refresh ladder-control" id="ladder-login" type="button" aria-describedby="ladder-login-notice" disabled>用 GitHub 登录</button>
+          </div>
+          <p class="ladder-note" id="ladder-login-notice">登录后会尝试补传近 30 天的每日用量。榜单会公开 GitHub 用户名、用量和最近上传时间。</p>
         </div>
         <div class="ladder-preview" id="ladder-login-wait" hidden>
           <p>请在浏览器完成 GitHub 授权。授权成功后榜单会自动更新。</p>
@@ -406,6 +409,7 @@
           </div>
         </div>
         <p class="ladder-status" id="ladder-status" role="status"></p>
+        <p class="ladder-note" id="ladder-logout-pending" role="status" hidden></p>
       </div>
       <section class="ladder-card" aria-labelledby="ladder-upload-title">
         <h2 class="section-title" id="ladder-upload-title">数据上传</h2>
@@ -1226,6 +1230,11 @@
         element('login').disabled = busy;
         element('login-wait').hidden = !pendingLogin;
         element('account').hidden = !signedIn;
+        const logoutNote = element('logout-pending');
+        const logoutText = snapshot.logoutStorageFailed ? '暂时无法保存退出请求，请保持 Orca 打开，并在联网后完成退出。'
+          : snapshot.logoutPending ? '上次退出正在等待服务器确认，联网后会自动重试。' : '';
+        if (logoutNote.textContent !== logoutText) logoutNote.textContent = logoutText;
+        logoutNote.hidden = !logoutText;
         const boardProblem = selected ? messages[board.code] : undefined;
         const sessionStatus = checkingLogin ? '正在确认登录状态…' : '';
         const locked = account.lockedUntil > time, coolingDown = account.nextUploadAt > time;
