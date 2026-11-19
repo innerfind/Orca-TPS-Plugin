@@ -91,7 +91,8 @@
     .section-title { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.6; font-weight: 700; }
     .section-detail { margin: 0; color: var(--muted); font-size: 11px; }
     .ladder-card { padding: 12px 16px; }
-    .ladder-date { font-variant-numeric: tabular-nums; }
+    .ladder-refresh-time { font-variant-numeric: tabular-nums; }
+    .ladder-tabs { margin-top: 6px; }
     .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
     .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
     .ladder-primary { color: var(--surface); background: var(--blue); }
@@ -99,14 +100,116 @@
     .ladder-actions .ladder-note { margin: 0; }
     .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .ladder-status:empty, .ladder-mine:empty { display: none; }
-    .ladder-account-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
-    .ladder-mine { margin: 0; color: var(--purple); font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-    .ladder-account-head .ladder-note { margin-top: 2px; }
+    .ladder-user-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: start; }
+    .ladder-identity { display: flex; grid-column: 1 / -1; gap: 4px 7px; align-items: center; flex-wrap: wrap; min-width: 0; }
+    .ladder-user-stat { min-width: 0; margin: 0; padding-inline-start: 8px; border-inline-start: 1px solid var(--line); }
+    .ladder-user-stat dt { color: var(--muted); font-size: 11px; }
+    .ladder-user-stat dd { margin: 1px 0 0; font-variant-numeric: tabular-nums; }
+    .ladder-user-rank { font-weight: 700; }
+    .ladder-user-tokens { color: var(--blue); font-size: 11px; overflow-wrap: anywhere; }
+    .ladder-mine { min-width: 0; margin: 0; color: var(--purple); font-size: 22px; font-weight: 800; line-height: 1.25; letter-spacing: -.3px; overflow-wrap: anywhere; }
     .ladder-account-actions { margin-top: 8px; }
+    .ladder-badges { display: flex; flex-wrap: wrap; gap: 3px 4px; align-items: center; }
+    .ladder-badges:empty { display: none; }
+    .ladder-medal {
+      position: relative; display: inline-block; flex-shrink: 0; width: 48px; height: 48px;
+      filter: drop-shadow(0 1px 1px rgb(0 0 0 / 25%));
+    }
+    .ladder-medal-7 { --medal-phase: -1.2s; }
+    .ladder-medal-30 { --medal-phase: -2.4s; }
+    .ladder-medal[data-place="1"] {
+      --medal-light: #fff3bc; --medal-mid: #e6b541; --medal-dark: #8b5515;
+      --medal-face-light: #ffedb0; --medal-face-dark: #cf9b36;
+      --medal-ink: #4c2e0c; --medal-sheen: rgb(255 249 217 / 95%);
+    }
+    .ladder-medal[data-place="2"] {
+      --medal-light: #f6f9fc; --medal-mid: #bac5d0; --medal-dark: #65727f;
+      --medal-face-light: #edf3f9; --medal-face-dark: #a6b2bf;
+      --medal-ink: #2e3947; --medal-sheen: rgb(243 250 255 / 85%);
+    }
+    .ladder-medal[data-place="3"] {
+      --medal-light: #f9c9a0; --medal-mid: #c18356; --medal-dark: #794527;
+      --medal-face-light: #f3c7a7; --medal-face-dark: #bb7952;
+      --medal-ink: #44281a; --medal-sheen: rgb(255 230 204 / 76%);
+    }
+    .ladder-medal-crown {
+      position: absolute; top: 1px; left: 13px; width: 22px; height: 13px;
+      clip-path: polygon(0 25%, 24% 54%, 24% 7%, 41% 40%, 50% 0, 59% 40%, 76% 7%, 76% 54%, 100% 25%,
+        85% 92%, 69% 100%, 31% 100%, 15% 92%);
+      background: linear-gradient(180deg, transparent 68%, var(--medal-dark) 77%, var(--medal-light) 85%, var(--medal-mid) 95%),
+        linear-gradient(107deg, var(--medal-dark), var(--medal-light) 23%, var(--medal-mid) 41%, var(--medal-light) 62%, var(--medal-dark));
+    }
+    .ladder-medal-branch { position: absolute; inset: 7px 4px 1px; }
+    .ladder-medal-branch + .ladder-medal-branch { transform: scaleX(-1); }
+    .ladder-medal-branch::before {
+      content: ""; position: absolute; inset: 1px; border: 1px solid var(--medal-mid); border-radius: 50%;
+      clip-path: polygon(50% 50%, 0 1%, 0 100%, 53% 100%);
+    }
+    .ladder-medal-branch::after {
+      content: ""; position: absolute; left: 43%; bottom: 1.5px; width: 7px; height: 1px;
+      background: var(--medal-mid); transform: rotate(21deg);
+    }
+    .ladder-medal-leaf {
+      position: absolute; top: 50%; left: 50%;
+      transform: rotate(var(--leaf-angle)) translateY(19px);
+    }
+    .ladder-medal-leaf::before, .ladder-medal-leaf::after {
+      content: ""; position: absolute; top: -1.5px; right: -.5px; width: 6px; height: 3px;
+      border-radius: 85% 5% 85% 5%; transform-origin: right center;
+      background: linear-gradient(160deg, var(--medal-light), var(--medal-mid) 56%, var(--medal-dark));
+    }
+    .ladder-medal-leaf::before { transform: rotate(-33deg); }
+    .ladder-medal-leaf::after { transform: rotate(44deg) scale(.9); }
+    .ladder-medal-emblem {
+      position: absolute; top: 14px; left: 10px; width: 28px; height: 28px; display: grid; padding: 2.5px;
+      overflow: hidden; border-radius: 50%; box-shadow: 0 0 0 .5px var(--medal-dark);
+      background: conic-gradient(from -30deg, var(--medal-light), var(--medal-dark) 28%, var(--medal-light) 48%,
+        var(--medal-dark) 69%, var(--medal-mid) 83%, var(--medal-light));
+    }
+    .ladder-medal-emblem::before {
+      content: ""; position: absolute; inset-block: 0; left: 0; width: 48%; pointer-events: none;
+      background: linear-gradient(90deg, transparent, var(--medal-sheen) 45%, var(--medal-light) 52%, transparent);
+      animation: medal-sweep 3.6s ease-in-out var(--medal-phase, 0s) infinite;
+    }
+    .ladder-medal-mark {
+      position: relative; display: grid; place-items: center; border-radius: 50%;
+      background: linear-gradient(150deg, var(--medal-face-light) 20%, var(--medal-face-dark) 85%);
+      box-shadow: 0 0 0 .5px var(--medal-dark), inset 0 .75px 0 var(--medal-light);
+      color: var(--medal-ink); font: 700 14px/1 Georgia, serif; font-variant-numeric: lining-nums tabular-nums;
+      text-shadow: 0 .75px 0 var(--medal-light);
+    }
+    .ladder-medal::before, .ladder-medal::after {
+      content: ""; position: absolute; z-index: 1; opacity: 0; pointer-events: none;
+      clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+      background: radial-gradient(circle, var(--medal-light), var(--medal-sheen));
+      animation: medal-twinkle 3.6s ease-in-out var(--medal-phase, 0s) infinite;
+    }
+    .ladder-medal::before { left: 9px; top: 13px; width: 10px; height: 10px; }
+    .ladder-medal::after {
+      right: 8px; top: 31px; width: 8px; height: 8px;
+      animation-delay: calc(var(--medal-phase, 0s) + .55s);
+    }
+    @keyframes medal-sweep {
+      0%, 34% { transform: translateX(-160%) skewX(-22deg); }
+      74%, 100% { transform: translateX(280%) skewX(-22deg); }
+    }
+    @keyframes medal-twinkle {
+      0%, 37%, 66%, 100% { opacity: 0; transform: scale(.35); }
+      50% { opacity: 1; transform: scale(1); }
+    }
+    .ladder-title-actions { display: flex; align-items: center; gap: 6px; }
+    .ladder-refresh { width: 28px; min-height: 28px; padding: 0; border-radius: 9px; }
     .ladder-preview { padding: 9px 11px; border-radius: 13px; background: var(--button-bg); }
     .ladder-preview p { margin: 0 0 6px; }
     .ladder-preview .ladder-note { margin-bottom: 8px; }
-    .ladder-upload { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .ladder-upload { margin-top: 7px; }
+    .ladder-upload-feedback {
+      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: baseline;
+      font-variant-numeric: tabular-nums;
+    }
+    .ladder-upload-result { text-align: end; overflow-wrap: anywhere; }
+    .ladder-upload-result[data-result="success"] { color: var(--green); }
+    .ladder-upload-result[data-result="failure"] { color: var(--error); }
     .ladder-rows { margin: 6px 0 0; padding: 0; list-style: none; }
     .ladder-rows:empty { margin: 0; }
     .ladder-rows li {
@@ -120,7 +223,9 @@
       background: var(--tag-bg); color: var(--muted); font-size: 11px; font-weight: 700;
     }
     .ladder-self .ladder-rank { background: var(--button-bg); color: var(--blue); }
-    .ladder-name { grid-area: name; color: var(--purple); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ladder-row-user { grid-area: name; display: flex; gap: 4px; align-items: center; min-width: 0; }
+    .ladder-row-user .ladder-medal { zoom: .85; }
+    .ladder-name { min-width: 0; color: var(--purple); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ladder-total {
       grid-area: total; padding: 4px 8px; border-radius: 11px; background: var(--button-bg); color: var(--blue);
       font-size: 14px; font-weight: 750; text-align: end; overflow-wrap: anywhere; max-width: 15ch;
@@ -177,7 +282,7 @@
     .war, .heat { padding: 10px 16px; }
     .war-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 3px; border-radius: 13px; background: var(--speed-bg); }
     .war-tab { min-width: 0; padding: 5px 4px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 650; cursor: pointer; }
-    .war-tab[aria-selected="true"] { background: var(--button-bg); color: var(--blue); }
+    .war-tab[aria-selected="true"], .war-tab[aria-pressed="true"] { background: var(--button-bg); color: var(--blue); }
     .war-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .war-totals { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 10px; margin-top: 10px; }
     .war-stat { min-width: 0; padding: 7px 9px; border-radius: 13px; background: var(--speed-bg); }
@@ -237,6 +342,7 @@
       .speed { padding: 5px 8px; gap: 3px; }
       .speed-value { font-size: 17px; }
       .war, .heat, .ladder-card { padding-inline: 12px; }
+      .ladder-mine { font-size: 20px; }
       .war-totals { gap: 6px; }
       .war-value { font-size: 17px; }
       .ladder-total { padding-inline: 6px; font-size: 12px; }
@@ -244,6 +350,7 @@
     @media (prefers-reduced-motion: reduce) {
       .refresh.is-busy svg { animation: none; }
       .refresh:active:not(:disabled) { transform: none; }
+      .ladder-medal::before, .ladder-medal::after, .ladder-medal-emblem::before { animation: none; opacity: 0; }
     }
   </style>
 </head>
@@ -268,43 +375,64 @@
           </div>
         </div>
         <div id="ladder-account" hidden>
-          <div class="ladder-account-head">
-            <div>
+          <div class="ladder-user-grid" aria-label="个人榜单数据">
+            <div class="ladder-identity">
               <p class="ladder-mine" id="ladder-mine"></p>
-              <p class="ladder-note" id="ladder-usage"></p>
+              <span class="ladder-badges" id="ladder-medals"></span>
             </div>
-            <div class="ladder-actions">
-              <button class="refresh" id="ladder-update" type="button">刷新榜单</button>
-              <button class="refresh ladder-secondary" id="ladder-logout" type="button">退出登录</button>
-            </div>
+            <dl class="ladder-user-stat"><dt>今日排名</dt>
+              <dd class="ladder-user-rank" id="ladder-user-rank-1">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-1" title="今日榜单用量">—</dd>
+            </dl>
+            <dl class="ladder-user-stat"><dt>7 天排名</dt>
+              <dd class="ladder-user-rank" id="ladder-user-rank-7">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-7" title="7 天榜单用量">—</dd>
+            </dl>
+            <dl class="ladder-user-stat"><dt>30 天排名</dt>
+              <dd class="ladder-user-rank" id="ladder-user-rank-30">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-30" title="30 天榜单用量">—</dd>
+            </dl>
           </div>
-          <button class="refresh ladder-primary ladder-account-actions" id="ladder-preview" type="button">上传今日用量</button>
-          <div class="ladder-preview ladder-account-actions" id="ladder-confirmation" hidden>
-            <p id="ladder-preview-text"></p>
-            <p class="ladder-note">上传会更新当天的成绩。</p>
-            <div class="ladder-actions">
-              <button class="refresh ladder-primary" id="ladder-submit" type="button">确认上传</button>
-              <button class="refresh ladder-secondary" id="ladder-cancel" type="button">取消</button>
-            </div>
-          </div>
-          <div class="ladder-upload">
-            <form class="ladder-actions" id="ladder-upload-form">
-              <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch">自动上传</label>
-              <label class="ladder-field">
-                间隔（秒）
-                <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" required>
-              </label>
-              <button class="refresh ladder-secondary" type="submit">保存间隔</button>
-            </form>
-            <p class="ladder-note" id="ladder-upload-note"></p>
-          </div>
+          <button class="refresh ladder-secondary ladder-account-actions" id="ladder-logout" type="button">退出登录</button>
         </div>
         <p class="ladder-status" id="ladder-status" role="status"></p>
       </div>
+      <section class="ladder-card" aria-labelledby="ladder-upload-title">
+        <h2 class="section-title" id="ladder-upload-title">数据上传</h2>
+        <form class="ladder-actions ladder-upload" id="ladder-upload-form">
+          <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch" disabled>自动上传</label>
+          <label class="ladder-field">
+            时间间隔
+            <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" aria-label="上传间隔（秒）" required disabled>
+            秒
+          </label>
+          <button class="refresh ladder-secondary" id="ladder-save-upload" type="submit" disabled>保存设置</button>
+          <button class="refresh ladder-primary" id="ladder-preview" type="button" disabled>手动上传</button>
+        </form>
+        <div class="ladder-upload-feedback">
+          <p class="ladder-note" id="ladder-upload-note"></p>
+          <p class="ladder-note ladder-upload-result" id="ladder-upload-result" role="status" hidden></p>
+        </div>
+        <div class="ladder-preview ladder-account-actions" id="ladder-confirmation" hidden>
+          <p id="ladder-preview-text"></p>
+          <p class="ladder-note">上传会更新当天的成绩。</p>
+          <div class="ladder-actions">
+            <button class="refresh ladder-primary" id="ladder-submit" type="button">确认上传</button>
+            <button class="refresh ladder-secondary" id="ladder-cancel" type="button">取消</button>
+          </div>
+        </div>
+      </section>
       <section class="ladder-card" aria-labelledby="ladder-rank-title">
         <div class="section-head">
-          <h2 class="section-title" id="ladder-rank-title">今日排名</h2>
-          <p class="section-detail ladder-date" id="ladder-summary"></p>
+          <div class="ladder-title-actions">
+            <h2 class="section-title" id="ladder-rank-title">今日排名</h2>
+            <button class="refresh ladder-refresh" id="ladder-update" type="button" aria-label="刷新榜单" title="刷新榜单">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
+            </button>
+          </div>
+          <time class="section-detail ladder-refresh-time" id="ladder-refresh-time" hidden></time>
+        </div>
+        <div class="war-tabs ladder-tabs" role="group" aria-label="榜单范围">
+          <button class="war-tab" type="button" data-rank-days="1" aria-pressed="true">今天</button>
+          <button class="war-tab" type="button" data-rank-days="7" aria-pressed="false">近 7 天</button>
+          <button class="war-tab" type="button" data-rank-days="30" aria-pressed="false">近 30 天</button>
         </div>
         <p class="ladder-note" id="ladder-freshness" role="status" hidden></p>
         <ol class="ladder-rows" id="ladder-rows" aria-label="今日用量名次"></ol>
@@ -885,109 +1013,238 @@
       const group = document.getElementById('leaderboard');
       const lifetime = new AbortController();
       const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const today = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const shortClock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+      const boardDay = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const rankTabs = [...group.querySelectorAll('[data-rank-days]')];
+      const periods = [
+        { days: 1, mark: 'Ⅰ', title: '今日' }, { days: 7, mark: '7', title: '7 天' },
+        { days: 30, mark: '30', title: '30 天' }
+      ];
+      const podium = ['冠军', '亚军', '季军'];
       const messages = {
         unavailable: '连不上榜单服务器，请稍后重试。', github_unavailable: '榜单暂时无法完成 GitHub 登录。',
         login_required: '用 GitHub 登录后即可提交。', banned: '这个 GitHub 账号已被封禁，无法提交。',
+        session_expired: '登录已失效，请重新登录。',
         login_expired: '登录请求已过期，请重新登录。', login_denied: 'GitHub 授权已取消。',
-        browser_unavailable: '没有打开浏览器，请重新点击登录。', signed_in: '已登录。',
+        browser_unavailable: '没有打开浏览器，请重新点击登录。', signed_in: '已登录。', signed_out: '已退出登录。',
         accepted: '已上传，成绩已更新。', duplicate: '这次上传已经处理。',
         removed: '今日成绩已由管理员移除。', too_soon: '上次上传后满 10 秒即可更新。',
         upload_in_progress: '正在上传，请稍候。',
         locked: '今天的提交权限已锁定，北京时间明天零点恢复。',
+        history_pending: '正在准备首次上传的历史用量…', history_invalid: '历史用量未能上传，请检查个人统计。',
         new_day: '榜单日期已更新，请重新预览。', usage_changed: '用量已变化，请重新预览。',
         usage_unready: '当日用量还未准备好，请稍后再试。', invalid: '提交数据不合规，请刷新再试。',
         rate_limited: '请求太频繁，请稍后再试。', invalid_interval: '上传间隔至少为 10 秒。'
       };
-      let model, local, cachedRanking, preview, loginDraft, pendingLogin, retryLogin;
-      let busy = false, savingUpload = false, refreshing = false, readingUsage = false, preparing = false, edited = false;
-      let revision = 0, drawnRows = '', renderedDay = '', loginProblem = '', messageCode = '';
+      let model, session, local, preview, pendingLogin, retryLogin, rankDays = 1;
+      const cachedRankings = new Map(), refreshing = new Set();
+      let busy = false, savingUpload = false, readingUsage = false, restoringSession = false, edited = false;
+      let revision = 0, drawnRows = '', drawnMedals = '', renderedDay = '', loginProblem = '', messageCode = '';
+      let summaryAccount = '', summaryUpload = null;
 
       async function request(action, payload = {}) {
         try {
-          return await bridge.request('tps.leaderboard', { action, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
+          return await bridge.request('tps.leaderboard', { action, days: rankDays, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
         } catch {
           return { code: 'unavailable' };
         }
       }
 
-      function renderRows(rows) {
-        const signature = JSON.stringify(rows);
+      function medal(rank, period) {
+        const place = podium[rank - 1];
+        if (!place) return null;
+        const badge = document.createElement('span');
+        badge.className = 'ladder-medal ladder-medal-' + period.days;
+        badge.dataset.place = rank;
+        badge.title = period.title + place;
+        badge.setAttribute('role', 'img');
+        badge.setAttribute('aria-label', badge.title);
+        const crown = document.createElement('span'), branch = document.createElement('span');
+        const emblem = document.createElement('span'), mark = document.createElement('span');
+        crown.className = 'ladder-medal-crown';
+        branch.className = 'ladder-medal-branch';
+        for (let angle = 15; angle <= 135; angle += 20) {
+          const leaf = document.createElement('span');
+          leaf.className = 'ladder-medal-leaf';
+          leaf.style.setProperty('--leaf-angle', `${angle}deg`);
+          branch.append(leaf);
+        }
+        emblem.className = 'ladder-medal-emblem';
+        mark.className = 'ladder-medal-mark';
+        mark.textContent = period.mark;
+        emblem.append(mark);
+        badge.append(crown, branch, branch.cloneNode(true), emblem);
+        return badge;
+      }
+
+      function renderRows(rows, username) {
+        const signature = JSON.stringify([rankDays, username, rows]);
         if (signature === drawnRows) return;
         drawnRows = signature;
         const list = document.createDocumentFragment();
+        const period = periods.find(entry => entry.days === rankDays);
         for (const row of rows) {
           const item = document.createElement('li');
-          if (row.mine) item.classList.add('ladder-self');
-          const rank = document.createElement('span'), name = document.createElement('span');
+          if (username && row.username === username) item.classList.add('ladder-self');
+          const rank = document.createElement('span'), name = document.createElement('span'), user = document.createElement('div');
           const total = document.createElement('strong'), time = document.createElement('time');
           rank.className = 'ladder-rank';
           name.className = 'ladder-name';
+          user.className = 'ladder-row-user';
           total.className = 'ladder-total';
           time.className = 'ladder-time';
           rank.textContent = row.rank;
           name.textContent = row.username;
           name.title = row.username;
+          user.append(name);
+          const badge = medal(row.rank, period);
+          if (badge) user.append(badge);
           total.textContent = formatTokenMB(row.tokens);
-          time.textContent = clock.format(row.submittedAt);
+          time.textContent = (rankDays === 1 ? '' : '最近上传 ') + clock.format(row.submittedAt);
           time.dateTime = new Date(row.submittedAt).toISOString();
-          item.append(rank, name, total, time);
+          item.append(rank, user, total, time);
           list.append(item);
         }
         element('rows').replaceChildren(list);
       }
 
-      function render(code = messageCode) {
-        messageCode = code;
-        renderedDay = today();
-        const { board = {}, upload, lastAutomaticResult } = model ?? {};
-        const live = board.day === renderedDay && Array.isArray(board.rows);
-        const ranking = live ? board : cachedRanking?.day === renderedDay ? cachedRanking : null;
-        const freshness = element('freshness');
-        const notice = ranking && !live ? '上次更新 ' + clock.format(ranking.updatedAt)
-          : !ranking && !board.code ? '正在加载榜单…' : '';
-        if (freshness.textContent !== notice) freshness.textContent = notice;
-        freshness.hidden = !notice;
-        const signedIn = model?.signedIn === true || board.authenticated === true;
-        element('controls').hidden = false;
-        element('sign-in').hidden = signedIn || Boolean(pendingLogin);
-        element('login').disabled = busy || !loginDraft;
-        element('login-wait').hidden = !pendingLogin;
-        element('account').hidden = !signedIn;
-        element('status').textContent = messages[code] ?? messages[loginProblem] ?? (board?.banned ? messages.banned : messages[board?.code]) ?? (board?.lockedUntil ? messages.locked : '');
-        element('summary').textContent = renderedDay + ' · 北京时间';
-        element('empty').hidden = !ranking || ranking.rows.length > 0;
-        renderRows(ranking?.rows ?? []);
-        if (!signedIn) { preview = undefined; return; }
-        element('mine').textContent = live ? (board.rank ? board.username + ' · 第 ' + board.rank + ' 名' : (board.username ?? '')) : '';
-        const usageReady = local?.ready && local.day === renderedDay;
-        if (live && board.submitted) {
-          element('usage').textContent = board.tokens == null ? '今日成绩已移除。' : '榜单用量 ' + formatTokenMB(board.tokens) + '（含缓存读写）';
-        } else {
-          element('usage').textContent = usageReady ? '今日用量 ' + formatTokenMB(local.tokens) + '（含缓存读写）' : '正在汇总今日用量…';
+      function renderAccount(username, account) {
+        const identity = element('mine');
+        identity.textContent = username || '已登录';
+        identity.title = username ?? '';
+        const ranks = [];
+        for (const period of periods) {
+          const ranking = cachedRankings.get(period.days);
+          const row = username && ranking?.day === renderedDay ? ranking.rows.find(row => row.username === username) : null;
+          const freshToday = period.days === 1 && account.day === renderedDay && account.submitted &&
+            (!row || account.submittedAt >= row.submittedAt);
+          const tokens = freshToday ? account.tokens : row?.tokens;
+          element('user-rank-' + period.days).textContent = row ? '第 ' + row.rank + ' 名' : '—';
+          element('user-tokens-' + period.days).textContent = formatTokenMB(tokens);
+          ranks.push(row?.rank);
         }
-        const canSubmit = live && board.authenticated === true && usageReady && local.tokens > 0 && !board.banned && !board.lockedUntil &&
-          !(board.submitted && board.tokens === null);
-        element('preview').hidden = !canSubmit || Boolean(preview);
-        element('preview').disabled = Boolean(board.nextUploadAt);
-        element('confirmation').hidden = !canSubmit || !preview;
-        element('submit').disabled = Boolean(board.nextUploadAt);
-        if (board.nextUploadAt && canSubmit && !code) element('status').textContent = messages.too_soon;
-        const enabled = upload?.enabled === true;
-        element('upload-enabled').checked = enabled;
-        element('upload-enabled').disabled = savingUpload || (!enabled && (!live || board.authenticated !== true || board.banned));
-        if (!edited) element('upload-interval').value = upload?.interval ?? 60;
-        const result = lastAutomaticResult?.day === board.day ? messages[lastAutomaticResult.code] : '';
-        element('upload-note').textContent = enabled ? `Orca 运行时每 ${upload.interval} 秒上传。${result ? ' ' + result : ''}` : '自动上传已关闭。';
+        const signature = JSON.stringify(ranks);
+        if (signature === drawnMedals) return;
+        drawnMedals = signature;
+        element('medals').replaceChildren(...ranks.map((rank, index) => medal(rank, periods[index])).filter(Boolean));
       }
 
-      async function showCache() {
-        if (cachedRanking?.day === today()) return;
-        const { ranking } = await request('cache');
-        if (lifetime.signal.aborted || !ranking || ranking.day !== today()) return;
+      function renderUpload(snapshot, signedIn, time) {
+        const enabled = snapshot.upload?.enabled === true;
+        const next = Math.ceil(((snapshot.nextAutomaticAt ?? 0) - time) / 1000);
+        const countdown = element('upload-note');
+        let text = '自动上传已关闭。';
+        if (!signedIn) text = '登录后可上传今日用量。';
+        else if (snapshot.uploading || messageCode === 'upload_in_progress') text = '正在上传…';
+        else if (enabled) {
+          if (next > 0) {
+            const hours = Math.floor(next / 3600), minutes = Math.floor(next / 60) % 60, seconds = next % 60;
+            const span = [minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
+            text = '自动上传倒计时 ' + (hours ? hours + ':' : '') + span;
+          } else text = '等待自动上传…';
+        }
+        if (countdown.textContent !== text) countdown.textContent = text;
+        const log = element('upload-result'), record = signedIn ? snapshot.lastUpload : null;
+        const success = ['accepted', 'initialized', 'duplicate'].includes(record?.code);
+        log.hidden = !record;
+        log.dataset.result = success ? 'success' : 'failure';
+        const name = { automatic: '自动上传', manual: '手动上传', history: '历史补传' }[record?.kind] ?? '上传';
+        const detail = record?.code === 'initialized' ? '已完成' : success ? '成功' : '失败 · ' + (messages[record?.code] ?? '请重试。');
+        const fullOutcome = record ? clock.format(record.at) + ' · ' + name + detail : '';
+        const outcome = success ? name + detail + ' ' + shortClock.format(record.at) : fullOutcome;
+        if (log.textContent !== outcome) log.textContent = outcome;
+        const tooltip = success ? fullOutcome : '';
+        if (log.title !== tooltip) log.title = tooltip;
+      }
+
+      function render(code = messageCode) {
+        messageCode = code;
+        renderedDay = boardDay();
+        const time = Date.now();
+        const { board = {} } = model ?? {};
+        const snapshot = session ?? model ?? {};
+        const { board: account = board, upload, sessionProblem, initializing, historyProblem } = snapshot;
+        const selected = model?.days === rankDays;
+        const readyBoard = board.day === renderedDay && Array.isArray(board.rows);
+        const live = selected && readyBoard;
+        const cached = cachedRankings.get(rankDays);
+        const cachedRanking = cached?.day === renderedDay ? cached : null;
+        const ranking = live ? board : cachedRanking;
+        const freshness = element('freshness');
+        const notice = !ranking && !(selected && board.code) ? '正在加载榜单…' : '';
+        if (freshness.textContent !== notice) freshness.textContent = notice;
+        freshness.hidden = !notice;
+        const refreshedAt = (live ? model.updatedAt : null) ?? cachedRanking?.updatedAt ?? null;
+        const refreshTime = element('refresh-time');
+        refreshTime.hidden = refreshedAt === null;
+        if (refreshedAt !== null) {
+          refreshTime.dateTime = new Date(refreshedAt).toISOString();
+          refreshTime.title = clock.format(refreshedAt);
+          refreshTime.textContent = '刷新于 ' + shortClock.format(refreshedAt);
+        }
+        const signedIn = snapshot.signedIn ?? account.authenticated;
+        const checkingLogin = typeof signedIn !== 'boolean';
+        element('controls').hidden = false;
+        element('sign-in').hidden = checkingLogin || signedIn || Boolean(pendingLogin);
+        element('login').disabled = busy;
+        element('login-wait').hidden = !pendingLogin;
+        element('account').hidden = !signedIn;
+        const boardProblem = selected ? messages[board.code] : undefined;
+        const sessionStatus = checkingLogin ? '正在确认登录状态…' : '';
+        const locked = account.lockedUntil > time, coolingDown = account.nextUploadAt > time;
+        const authProblem = pendingLogin ? undefined : messages[sessionProblem];
+        const actionMessage = code === 'upload_in_progress' || code === snapshot.lastUpload?.code ? undefined : messages[code];
+        element('status').textContent = authProblem ?? actionMessage ?? messages[loginProblem] ??
+          (account.banned ? messages.banned : boardProblem) ??
+          (locked ? messages.locked : messages[historyProblem] ?? (initializing ? messages.history_pending : sessionStatus));
+        element('rank-title').textContent = rankDays === 1 ? '今日排名' : '累计排名';
+        element('empty').textContent = rankDays === 1 ? '今日还没有人提交。' : '这段时间还没有成绩。';
+        element('empty').hidden = !ranking || ranking.rows.length > 0;
+        const username = signedIn ? account.username : '';
+        renderRows(ranking?.rows ?? [], username);
+        if (signedIn) renderAccount(username, account);
+        else preview = undefined;
+        const usageReady = local?.ready && local.day === renderedDay;
+        const removed = account.day === renderedDay && account.submitted && account.tokens === null;
+        const canSubmit = signedIn && usageReady && local.tokens > 0 && !locked && !removed;
+        element('preview').hidden = Boolean(preview);
+        element('preview').disabled = !canSubmit || coolingDown || busy || snapshot.uploading;
+        element('confirmation').hidden = !canSubmit || !preview;
+        element('submit').disabled = coolingDown || busy || snapshot.uploading;
+        if (coolingDown && canSubmit && !code && !upload?.enabled) element('status').textContent = messages.too_soon;
+        const enabled = upload?.enabled === true;
+        element('upload-enabled').checked = enabled;
+        element('upload-enabled').disabled = !signedIn || savingUpload;
+        element('upload-interval').disabled = !signedIn || savingUpload;
+        element('save-upload').disabled = !signedIn || savingUpload;
+        if (!edited) element('upload-interval').value = upload?.interval ?? 60;
+        renderUpload(snapshot, signedIn, time);
+      }
+
+      async function showCache(days = rankDays) {
+        if (cachedRankings.get(days)?.day === boardDay()) return;
+        const { ranking } = await request('cache', { days });
+        if (lifetime.signal.aborted || !ranking || ranking.day !== boardDay()) return;
+        const cachedRanking = cachedRankings.get(days);
         if (cachedRanking?.day === ranking.day && cachedRanking.updatedAt >= ranking.updatedAt) return;
-        cachedRanking = ranking;
-        render();
+        cachedRankings.set(days, ranking);
+        if (!group.hidden) render();
+      }
+
+      async function refreshSession() {
+        if (group.hidden || restoringSession || busy || savingUpload || lifetime.signal.aborted) return;
+        restoringSession = true;
+        const requestedAt = revision;
+        try {
+          const result = await request('session');
+          if (lifetime.signal.aborted || revision !== requestedAt || typeof result.signedIn !== 'boolean') return;
+          if (result.signedIn !== model?.signedIn || result.board?.username !== (session ?? model)?.board?.username) showState(result);
+          else {
+            session = result;
+            render();
+            showSummaries();
+          }
+        } finally { restoringSession = false; }
       }
 
       async function refreshUsage() {
@@ -1002,41 +1259,82 @@
         } finally { readingUsage = false; }
       }
 
-      function showState(result) {
-        model = result.board ? result : { ...model, board: { code: result.code } };
-        const { board, updatedAt } = model;
-        if (Number.isSafeInteger(updatedAt) && board.day === today() && Array.isArray(board.rows)) {
-          const rows = board.rows.map(({ rank, username, tokens, submittedAt }) => ({ rank, username, tokens, submittedAt }));
-          cachedRanking = { day: board.day, rows, updatedAt };
-        }
+      function cacheRanking(result, days) {
+        const { board, updatedAt } = result;
+        if (!Number.isSafeInteger(updatedAt) || board?.day !== boardDay() || !Array.isArray(board.rows)) return false;
+        const rows = board.rows.map(({ rank, username, tokens, submittedAt }) => ({ rank, username, tokens, submittedAt }));
+        cachedRankings.set(days, { day: board.day, rows, updatedAt });
+        return true;
+      }
+
+      function showState(result, days = rankDays) {
+        model = result.board ? result : { ...model, days, board: { code: result.code } };
+        if (typeof result.signedIn === 'boolean') session = result;
+        cacheRanking(result, days);
         render(result.code ?? '');
+        showSummaries();
         void refreshUsage();
       }
 
-      async function refresh() {
+      function showSummaries() {
+        const current = session ?? model, name = current?.signedIn && current.board?.username;
+        if (!name) { summaryAccount = ''; summaryUpload = null; return; }
+        if (group.hidden) return;
+        const day = boardDay(), key = day + '/' + name;
+        const uploaded = current.lastUpload?.code === 'accepted' ? current.lastUpload.at : null;
+        const first = summaryAccount !== key, justUploaded = !first && uploaded !== null && uploaded !== summaryUpload;
+        if (!first && !justUploaded) return;
+        summaryAccount = key;
+        if (first || uploaded !== null) summaryUpload = uploaded;
+        for (const { days } of periods) {
+          if (days === rankDays) continue;
+          if (justUploaded) void refresh(days);
+          else void showCache(days).then(() => {
+            if (summaryAccount === key && cachedRankings.get(days)?.day !== day) void refresh(days);
+          });
+        }
+      }
+
+      async function refresh(days = rankDays) {
         if (group.hidden || lifetime.signal.aborted) return;
-        if (renderedDay !== today()) render('');
-        if (busy || savingUpload || refreshing) return;
+        if (renderedDay !== boardDay()) render('');
+        if (busy || savingUpload || refreshing.has(days)) return;
         const requestedAt = revision;
-        refreshing = true;
+        refreshing.add(days);
         try {
-          const result = await request('state');
-          if (revision !== requestedAt || lifetime.signal.aborted) return;
-          showState(result);
-        } finally { refreshing = false; }
+          const result = await request('state', { days });
+          if (lifetime.signal.aborted) return;
+          if (days !== rankDays || revision !== requestedAt) {
+            if (cacheRanking(result, days)) render();
+          } else showState(result, days);
+        } finally { refreshing.delete(days); }
+      }
+
+      function showRanking() {
+        render('');
+        void refreshSession();
+        void showCache();
+        if (Date.now() - (cachedRankings.get(rankDays)?.updatedAt ?? 0) >= 1000) void refresh();
       }
 
       async function update(action, details) {
         if (busy) return;
         busy = true;
         const requestedAt = ++revision;
+        if (action === 'logout') {
+          edited = false;
+          preview = undefined;
+          pendingLogin = undefined;
+          loginProblem = '';
+          clearTimeout(retryLogin);
+        }
+        if (action === 'submit') render('upload_in_progress');
         try {
           const result = await request(action, details);
-          if (action === 'logout') { edited = false; preview = undefined; }
           busy = false;
-          if (result.board && revision === requestedAt) showState(result);
+          if (result.board && (revision === requestedAt || result.code === 'signed_out')) showState(result);
           else render(result.code);
-          if (action === 'logout') void prepareLogin();
+          if (result.code === 'signed_out') void refresh();
         } finally { busy = false; }
       }
 
@@ -1046,22 +1344,10 @@
         revision++;
         try {
           const result = await request('upload', { enabled, interval });
-          if (result.upload) model = { ...model, upload: result.upload, lastAutomaticResult: result.lastAutomaticResult };
+          if (typeof result.signedIn === 'boolean') session = result;
           savingUpload = false;
           render(result.code);
         } finally { savingUpload = false; }
-      }
-
-      async function prepareLogin() {
-        if (loginDraft || preparing || lifetime.signal.aborted) return;
-        preparing = true;
-        const result = await request('login');
-        preparing = false;
-        if (lifetime.signal.aborted) return;
-        if (result.loginUrl) {
-          loginDraft = result;
-          element('login').disabled = busy;
-        } else render(result.code);
       }
 
       async function poll() {
@@ -1076,34 +1362,47 @@
         }
         revision++;
         pendingLogin = undefined;
-        loginDraft = undefined;
         if (result.code === 'signed_in') {
           showState(result);
+          void refresh();
         } else {
-          loginProblem = result.code === 'pending' ? 'login_expired' : result.code;
+          loginProblem = Date.now() >= attempt.expiresAt ? 'login_expired' : result.code;
           render(loginProblem);
-          await request('cancel');
-          void prepareLogin();
         }
       }
 
       if (!bridge?.request) return;
-      group.addEventListener('tps-view-opened', () => {
-        render('');
-        void showCache();
-        void refresh();
-        void prepareLogin();
+      for (const tab of rankTabs) tab.addEventListener('click', () => {
+        const days = Number(tab.dataset.rankDays);
+        if (days === rankDays) return;
+        rankDays = days;
+        for (const tab of rankTabs) tab.setAttribute('aria-pressed', String(Number(tab.dataset.rankDays) === days));
+        showRanking();
       });
-      element('update').addEventListener('click', refresh);
+      group.addEventListener('tps-view-opened', showRanking);
+      element('update').addEventListener('click', async () => {
+        const button = element('update');
+        button.classList.add('is-busy');
+        try { await refresh(); } finally { button.classList.remove('is-busy'); }
+      });
       element('login').addEventListener('click', async () => {
-        if (busy || !loginDraft) return;
+        if (busy || pendingLogin) return;
         busy = true;
         revision++;
         loginProblem = '';
-        const attempt = { ...loginDraft, expiresAt: Date.now() + loginDraft.timeout };
-        pendingLogin = attempt;
+        let attempt;
         render('');
         try {
+          const draft = await request('login');
+          if (lifetime.signal.aborted) return;
+          if (!draft.loginUrl) {
+            loginProblem = draft.code ?? 'unavailable';
+            render(loginProblem);
+            return;
+          }
+          attempt = { ...draft, expiresAt: Date.now() + draft.timeout };
+          pendingLogin = attempt;
+          render('');
           const result = await window.orca.shell.openExternal(attempt.loginUrl);
           if (pendingLogin !== attempt) return;
           if (result?.opened) {
@@ -1120,21 +1419,21 @@
           render(loginProblem);
         } finally {
           busy = false;
-          element('login').disabled = !loginDraft;
+          if (!lifetime.signal.aborted) render();
         }
       });
       element('stop-login').addEventListener('click', async () => {
         revision++;
+        const attempt = pendingLogin;
         pendingLogin = undefined;
-        loginDraft = undefined;
+        loginProblem = '';
         clearTimeout(retryLogin);
         render('');
-        await request('cancel');
-        void prepareLogin();
+        if (attempt) await request('cancel', { loginUrl: attempt.loginUrl });
       });
       element('logout').addEventListener('click', () => void update('logout'));
       element('preview').addEventListener('click', () => {
-        if (!local?.ready || local.day !== today()) return;
+        if (!local?.ready || local.day !== boardDay()) return;
         preview = local;
         element('preview-text').textContent = '上传 ' + preview.day + ' 的 ' + formatTokenMB(preview.tokens) + '？';
         render('');
@@ -1163,7 +1462,10 @@
         edited = false;
         void updateUpload(uploadEnabled.checked, uploadInterval.valueAsNumber);
       });
-      const interval = setInterval(refresh, 1000);
+      const interval = setInterval(() => {
+        void refresh();
+        void refreshSession();
+      }, 1000);
       window.addEventListener('pagehide', () => {
         lifetime.abort();
         clearTimeout(retryLogin);

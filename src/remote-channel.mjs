@@ -427,7 +427,7 @@ export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts
   const connections = new Set();
   const signal = timeout => AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeout)]);
 
-  async function scanHost(route, scope, cutoffMs, timeZone, rankDay) {
+  async function scanHost(route, scope, cutoffMs, timeZone, rankDay, rankFrom) {
     const token = id(), startupSignal = signal(45_000);
     const files = await loadCollectorFiles();
     startupSignal.throwIfAborted();
@@ -440,7 +440,7 @@ export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts
       for (;;) {
         const page = await connection.exchange({
           ...(offset === 0 ? { files } : {}),
-          usage: { type: 'list', cutoffMs, offset, timeZone, rankDay }
+          usage: { type: 'list', cutoffMs, offset, timeZone, rankDay, rankFrom }
         }, signal(45_000));
         if (!Array.isArray(page.items) || page.items.length > USAGE_PAGE_SIZE || typeof page.more !== 'boolean' ||
           (page.more && page.items.length !== USAGE_PAGE_SIZE)) {
@@ -476,13 +476,14 @@ export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts
       return new Map(localKeys.filter(key => {
         const value = reply.results[key];
         if (!rankDay) return validUsageDays(value);
-        if (value?.leaderboardFrom !== rankDay || !validUsageDays(value.days) || !isObject(value.leaderboardDays)) return false;
-        return Object.entries(value.leaderboardDays).every(([day, total]) => day === rankDay && Number.isSafeInteger(total) && total >= 0);
+        if (value?.leaderboardFrom !== rankFrom || !validUsageDays(value.days) || !isObject(value.leaderboardDays)) return false;
+        return Object.entries(value.leaderboardDays).every(([day, total]) =>
+          /^\d{4}-\d{2}-\d{2}$/.test(day) && day >= rankFrom && day <= rankDay && Number.isSafeInteger(total) && total >= 0);
       }).map(key => [scope + key, reply.results[key]]));
     }
   }
 
-  async function discover(cutoffMs, rankDay) {
+  async function discover(cutoffMs, rankDay, rankFrom = rankDay) {
     const discovery = { descriptors: [], coveredRemoteScopes: new Set() };
     if (!orca.grantedCapabilities?.includes('workspace:read') || lifetime.signal.aborted) return discovery;
     let routes;
@@ -501,7 +502,7 @@ export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts
     const entries = [...scopes];
     for (let i = 0; i < entries.length && !lifetime.signal.aborted; i += 4) {
       const group = entries.slice(i, i + 4);
-      const scanned = await Promise.allSettled(group.map(([scope, route]) => scanHost(route, scope, cutoffMs, timeZone, rankDay)));
+      const scanned = await Promise.allSettled(group.map(([scope, route]) => scanHost(route, scope, cutoffMs, timeZone, rankDay, rankFrom)));
       for (const [index, result] of scanned.entries()) {
         if (result.status !== 'fulfilled') {
           if (!lifetime.signal.aborted) orca.log?.('部分远端用量暂不可读，保留上次统计。');

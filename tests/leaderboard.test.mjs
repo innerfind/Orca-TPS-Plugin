@@ -164,6 +164,90 @@ test('everyone can view today’s ranking, while submissions require login and e
   assert.equal((await api.submit(bob, 700)).status, 409);
 });
 
+test('weekly and monthly rankings total the latest score per Beijing day', async t => {
+  const api = await fixture(t, ['alice', 'bob', 'alice']);
+  const day = 86_400_000;
+  api.advance(-30 * day);
+  let alice = await api.login();
+  assert.equal((await api.submit(alice, 1000)).status, 201);
+  api.advance(day);
+  assert.equal((await api.submit(alice, 100)).status, 201);
+  api.advance(22 * day);
+  const removedDay = leaderboardDay(api.clock());
+  assert.equal((await api.submit(alice, 75)).status, 201);
+  api.advance(day);
+  const bob = await api.login();
+  assert.equal((await api.submit(alice, 200)).status, 201);
+  assert.equal((await api.submit(bob, 400)).status, 201);
+  api.advance(10_000);
+  assert.equal((await api.submit(alice, 250)).status, 201);
+
+  api.advance(6 * day);
+  alice = await api.login();
+  assert.equal((await api.submit(bob, 150)).status, 201);
+  api.advance(1000);
+  assert.equal((await api.submit(alice, 300)).status, 201);
+  const weekly = await (await api.get(alice, '/api/today?days=7')).json();
+  assert.equal(weekly.days, 7);
+  assert.equal(weekly.startDay, leaderboardDay(START - 6 * day));
+  assert.equal(weekly.day, TODAY);
+  assert.equal(weekly.tokens, 300);
+  assert.equal(weekly.rank, 2);
+  assert.deepEqual(weekly.rows.map(row => [row.username, row.tokens, row.mine]), [['bob', 550, false], ['alice', 550, true]]);
+  assert.equal(weekly.rows[1].submittedAt, api.clock());
+
+  const monthly = await (await api.call('/api/today?days=30')).json();
+  assert.equal(monthly.days, 30);
+  assert.equal(monthly.startDay, leaderboardDay(START - 29 * day));
+  assert.equal(monthly.authenticated, false);
+  assert.deepEqual(monthly.rows.map(row => [row.username, row.tokens]), [['alice', 725], ['bob', 550]]);
+  assert.equal((await api.call('/api/today?days=14')).status, 400);
+  const admin = await api.websiteLogin('admin');
+  await api.form('/admin/delete', admin.cookie, { account: '1', day: removedDay });
+  const updated = await (await api.call('/api/today?days=30')).json();
+  assert.equal(updated.rows[0].tokens, 650);
+  assert.equal((await (await api.get(alice)).json()).tokens, 300);
+});
+
+test('initialization imports missing days once across devices and respects removed scores', async t => {
+  const api = await fixture(t, ['alice', 'alice']);
+  const dayLength = 86_400_000;
+  api.advance(-dayLength);
+  const alice = await api.login();
+  const yesterday = leaderboardDay(api.clock());
+  assert.equal((await api.submit(alice, 70)).status, 201);
+  api.advance(dayLength);
+  const other = await api.login();
+  assert.equal((await api.submit(alice, 100)).status, 201);
+  const historyStatus = () => api.get(alice, '/api/history/status');
+  const init = (token, scores) => api.call('/api/history/init', {
+    method: 'POST', body: JSON.stringify({ day: TODAY, scores }),
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'Idempotency-Key': randomUUID() }
+  });
+  assert.equal((await init('', [])).status, 401);
+  assert.equal((await (await historyStatus()).json()).initialized, false);
+  const admin = await api.websiteLogin('admin');
+  await api.form('/admin/delete', admin.cookie, { account: '1', day: yesterday });
+  const oldest = leaderboardDay(START - 29 * dayLength);
+  const scores = [{ day: TODAY, tokens: 500 }, { day: yesterday, tokens: 500 }, { day: oldest, tokens: 40 }];
+  api.advance(5000);
+  assert.equal((await init(alice, scores)).status, 429);
+  api.advance(5000);
+  assert.equal((await init(alice, [...scores, { day: oldest, tokens: 5 }])).status, 400);
+  api.advance(5000);
+  assert.equal((await init(alice, [{ day: leaderboardDay(START - 30 * dayLength), tokens: 5 }])).status, 400);
+  api.advance(5000);
+  const results = await Promise.all([init(alice, scores), init(other, scores)]);
+  assert.deepEqual(results.map(reply => reply.status).sort(), [200, 201]);
+  assert.equal((await (await historyStatus()).json()).initialized, true);
+  assert.equal((await (await api.get(alice)).json()).tokens, 100);
+  assert.equal((await (await api.get(alice, '/api/today?days=30')).json()).rows[0].tokens, 140);
+  assert.equal((await api.submit(alice, 120)).status, 429);
+  api.advance(10_000);
+  assert.equal((await api.submit(alice, 120)).status, 201);
+  assert.equal((await (await api.get(alice, '/api/today?days=30')).json()).rows[0].tokens, 160);
+});
+
 test('the fifth error locks for the entire Beijing day, while retransmissions and errors outside the window do not count', async t => {
   const api = await fixture(t);
   const alice = await api.login();
@@ -254,6 +338,7 @@ test('reopening the database keeps the score and the daily lock', async t => {
 test('the plugin keeps its signed-in upload settings and stops uploading when switched off', async t => {
   const api = await fixture(t);
   const storage = new Map(), secrets = new Map(), handlers = new Map();
+  const requests = [];
   const orca = {
     storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
     host: { has: () => true, call: async (method, { key, value }) => {
@@ -267,7 +352,11 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   let tokens = 600;
   const launch = () => startLeaderboard(orca, {
     endpoint: api.endpoint, now: () => new Date(api.clock()),
-    readUsage: async () => ({ day: TODAY, tokens, ready: true })
+    readUsage: async () => ({ day: TODAY, tokens, ready: true }),
+    fetcher: (url, options) => {
+      requests.push({ path: url.pathname, method: options.method, authenticated: Boolean(options.headers.Authorization) });
+      return fetch(url, options);
+    }
   });
   let stop = launch();
   t.after(() => stop());
@@ -287,20 +376,32 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.equal(signedIn.token, undefined);
   stop();
   stop = launch();
+  const beforeRestore = requests.length;
+  const restored = await run('session');
+  assert.equal(restored.board.username, 'alice');
+  assert.equal(restored.signedIn, true);
+  assert.equal(requests.length, beforeRestore);
   assert.equal((await run('state')).board.username, 'alice');
+  assert.deepEqual(requests.at(-1), { path: '/api/today', method: 'GET', authenticated: false });
   tokens = 700;
   assert.equal((await run('submit', { day: TODAY, tokens: 600 })).code, 'usage_changed');
+  const beforeUpload = requests.length;
   const submitted = await run('submit', { day: TODAY, tokens: 700 });
   assert.equal(submitted.code, 'accepted');
-  assert.equal(submitted.board.rows[0].tokens, 700);
+  assert.equal(submitted.board.tokens, 700);
+  assert.deepEqual(requests.slice(beforeUpload), [{ path: '/api/today/submit', method: 'POST', authenticated: true }]);
+  assert.equal((await run('state')).board.rows[0].mine, true);
   const viewerToken = secrets.get('leaderboard-session');
   assert.equal((await run('submit', { day: TODAY, tokens: 700 })).code, 'too_soon');
   assert.equal((await run('upload', { enabled: true, interval: 9 })).code, 'invalid_interval');
   api.advance(10_000);
   tokens = 800;
   assert.deepEqual((await run('upload', { enabled: true, interval: 10 })).upload, { enabled: true, interval: 10 });
-  for (let tries = 0; tries < 25 && !(await run('state')).lastAutomaticResult; tries++) await delay(10);
-  assert.equal((await run('state')).board.tokens, 800);
+  for (let tries = 0; tries < 25 && (await run('session')).lastUpload?.kind !== 'automatic'; tries++) await delay(10);
+  const automatic = await run('session');
+  assert.equal(automatic.board.tokens, 800);
+  assert.deepEqual(automatic.lastUpload, { kind: 'automatic', code: 'accepted', at: api.clock() });
+  assert.equal(automatic.nextAutomaticAt, api.clock() + 10_000);
   tokens = 850;
   api.advance(9999);
   assert.equal((await run('state')).board.tokens, 800);
@@ -312,17 +413,35 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.deepEqual((await run('state')).upload, { enabled: true, interval: 10 });
   const off = await run('upload', { enabled: false, interval: 10 });
   assert.deepEqual(off.upload, { enabled: false, interval: 10 });
+  assert.equal(off.nextAutomaticAt, null);
   api.advance(20_000);
   tokens = 900;
   await delay(1100);
   assert.equal((await run('state')).board.tokens, 850);
   assert.equal((await run('logout')).board.authenticated, false);
   assert.equal(secrets.size, 0);
+  for (let attempt = 0; attempt < 25 && (await api.get(viewerToken, '/api/today/status')).status !== 401; attempt++) await delay(20);
   assert.equal((await api.get(viewerToken, '/api/today/status')).status, 401);
 
   await api.authorizePlugin((await run('login')).loginUrl, 'bob');
   assert.equal((await run('poll')).board.username, 'bob');
   assert.equal((await run('state')).upload.enabled, false);
+  const bob = secrets.get('leaderboard-session');
+  const admin = await api.websiteLogin('admin');
+  await api.form('/admin/ban', admin.cookie, { account: '2', ban: '1', reason: 'test' });
+  const blocked = await run('submit', { day: TODAY, tokens });
+  assert.equal(blocked.code, 'banned');
+  assert.equal(blocked.signedIn, true);
+  assert.equal(blocked.board.banned, true);
+  assert.equal(secrets.get('leaderboard-session'), bob);
+  await api.call('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + bob } });
+  assert.equal((await run('state')).signedIn, true);
+  const expired = await run('submit', { day: TODAY, tokens });
+  assert.equal(expired.code, 'login_required');
+  assert.equal(expired.sessionProblem, 'session_expired');
+  assert.equal(expired.signedIn, false);
+  assert.equal(secrets.size, 0);
+  assert.equal((await run('cache')).ranking.rows.length, 1);
 });
 
 test('the plugin shows the ranking while local usage is still loading', { timeout: 3000 }, async t => {
@@ -344,6 +463,113 @@ test('the plugin shows the ranking while local usage is still loading', { timeou
   assert.deepEqual(await personal, { local });
 });
 
+test('login retries a lost authorization response and logout does not wait for the network', { timeout: 8000 }, async t => {
+  const api = await fixture(t);
+  let handle, verifier, receivedToken, releaseRanking, releaseLogout, rankingStarted, ackReceived;
+  let rankCalls = 0, dropped = false;
+  const heldRanking = new Promise(resolve => { releaseRanking = resolve; });
+  const heldLogout = new Promise(resolve => { releaseLogout = resolve; });
+  const started = new Promise(resolve => { rankingStarted = resolve; });
+  const acknowledged = new Promise(resolve => { ackReceived = resolve; });
+  const stop = startLeaderboard({
+    storage: { get: async () => undefined, set: async () => {} },
+    panels: { handle: (_, callback) => { handle = callback; return { dispose() {} }; } }
+  }, {
+    endpoint: api.endpoint, now: () => new Date(api.clock()), readUsage: async () => undefined,
+    async fetcher(url, options) {
+      if (url.pathname === '/api/today') {
+        rankCalls++;
+        const board = await fetch(url, options);
+        rankingStarted();
+        await heldRanking;
+        return board;
+      }
+      if (url.pathname === '/api/auth/logout') await heldLogout;
+      const result = await fetch(url, options);
+      if (url.pathname === '/api/auth/plugin/poll') {
+        const input = JSON.parse(options.body);
+        if (input.received) ackReceived();
+        else if (result.ok && result.status === 200 && !dropped) {
+          dropped = true;
+          verifier = input.verifier;
+          receivedToken = (await result.json()).token;
+          throw new Error('The authorization response was lost');
+        }
+      }
+      return result;
+    }
+  });
+  t.after(() => { releaseRanking(); releaseLogout(); stop(); });
+  const run = action => handle({ action });
+  const firstLogin = await run('login');
+  await api.authorizePlugin(firstLogin.loginUrl, 'alice');
+  assert.equal((await run('poll')).code, 'unavailable');
+  const signedIn = await run('poll');
+  assert.equal(signedIn.code, 'signed_in');
+  assert.equal(signedIn.signedIn, true);
+  assert.equal(signedIn.board.username, 'alice');
+  assert.equal(rankCalls, 0);
+  await acknowledged;
+  assert.equal((await api.get(receivedToken, '/api/today/status')).status, 200);
+  const ackedPoll = await api.call('/api/auth/plugin/poll', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ verifier })
+  });
+  assert.equal(ackedPoll.status, 410);
+
+  const oldRanking = run('state');
+  await started;
+  const signedOut = await run('logout');
+  assert.equal(signedOut.code, 'signed_out');
+  assert.equal(signedOut.signedIn, false);
+  assert.equal((await api.get(receivedToken, '/api/today/status')).status, 200);
+  releaseRanking();
+  assert.equal((await oldRanking).board.authenticated, false);
+  releaseLogout();
+  for (let attempt = 0; attempt < 25 && (await api.get(receivedToken, '/api/today/status')).status !== 401; attempt++) await delay(20);
+  assert.equal((await api.get(receivedToken, '/api/today/status')).status, 401);
+  assert.notEqual((await run('login')).loginUrl, firstLogin.loginUrl);
+  assert.equal(rankCalls, 1);
+});
+
+test('login returns before initialization and the same session resumes it after a plugin restart', { timeout: 7000 }, async t => {
+  const api = await fixture(t);
+  const storage = new Map(), secrets = new Map();
+  let handle, historyReady = false;
+  const yesterday = leaderboardDay(START - 86_400_000);
+  const orca = {
+    storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
+    host: { has: () => true, call: async (method, { key, value }) => {
+      if (method === 'secrets.get') return { value: secrets.get(key) };
+      if (method === 'secrets.set') return secrets.set(key, value);
+      if (method === 'secrets.delete') return secrets.delete(key);
+    } },
+    grantedCapabilities: ['secrets:own'],
+    panels: { handle: (_, callback) => { handle = callback; return { dispose() {} }; } }
+  };
+  const launch = () => startLeaderboard(orca, {
+    endpoint: api.endpoint, now: () => new Date(api.clock()),
+    readUsage: async () => ({ day: TODAY, ready: true, tokens: 100 }),
+    readHistory: async () => historyReady ? { day: TODAY, ready: true, scores: [{ day: TODAY, tokens: 100 }, { day: yesterday, tokens: 200 }] } :
+      { day: TODAY, ready: false }
+  });
+  let stop = launch();
+  t.after(() => stop());
+  await api.authorizePlugin((await handle({ action: 'login' })).loginUrl, 'alice');
+  const signedIn = await handle({ action: 'poll' });
+  assert.equal(signedIn.code, 'signed_in');
+  assert.equal(signedIn.initializing, true);
+  assert.equal(signedIn.board.authenticated, true);
+  assert.deepEqual((await handle({ action: 'state' })).board.rows, []);
+  stop();
+  historyReady = true;
+  stop = launch();
+  for (let attempt = 0; attempt < 30 && (await handle({ action: 'state' })).initializing; attempt++) await delay(35);
+  const board = await handle({ action: 'state', days: 7 });
+  assert.equal(board.initializing, false);
+  assert.equal(board.board.tokens, 100);
+  assert.equal(board.board.rows[0].tokens, 300);
+});
+
 test('the plugin restores public rankings without the network and expires them at Beijing midnight', async t => {
   const stored = new Map();
   const row = { rank: 1, username: 'alice', tokens: 5, submittedAt: START };
@@ -358,31 +584,40 @@ test('the plugin restores public rankings without the network and expires them a
   };
   const launch = address => startLeaderboard(orca, {
     endpoint: address, now: () => new Date(clock), readUsage: async () => undefined,
-    fetcher: async () => {
+    fetcher: async url => {
       fetches++;
       if (offline) throw new Error('offline');
-      return Response.json({ day: TODAY, authenticated: true, banned: true, rank: 1, rows: [{ ...row, mine: true }] });
+      const days = Number(url.searchParams.get('days') ?? 1);
+      return Response.json({ day: TODAY, days, authenticated: true, banned: true, rank: 1,
+        rows: [{ ...row, tokens: row.tokens * days, mine: true }] });
     }
   });
   let stop = launch(endpoint);
   t.after(() => stop());
-  const run = action => handle({ action });
+  const run = (action, days) => handle({ action, days });
   assert.deepEqual(await run('cache'), { ranking: null });
   assert.equal(fetches, 0);
-  assert.equal((await run('state')).board.rows[0].mine, true);
-  assert.equal((await run('state')).board.banned, true);
+  assert.equal((await run('state')).board.rows[0].mine, false);
+  assert.equal((await run('state')).board.authenticated, false);
   assert.equal(writes, 1);
   assert.deepEqual([...stored.values()], [{ origin: endpoint, day: TODAY, rows: [row], updatedAt: START }]);
+  assert.deepEqual(await run('cache', 7), { ranking: null });
+  assert.equal((await run('state', 7)).board.rows[0].tokens, 35);
+  assert.equal((await run('state', 30)).board.rows[0].tokens, 150);
   stop();
 
   offline = true;
   stop = launch(endpoint);
   assert.deepEqual(await run('cache'), { ranking: { day: TODAY, rows: [row], updatedAt: START } });
-  assert.equal(fetches, 2);
-  assert.deepEqual((await run('state')).board, { code: 'unavailable' });
+  assert.equal((await run('cache', 7)).ranking.rows[0].tokens, 35);
+  assert.equal((await run('cache', 30)).ranking.rows[0].tokens, 150);
+  assert.equal(fetches, 4);
+  assert.deepEqual((await run('state')).board, { code: 'unavailable', authenticated: false });
   assert.equal((await run('cache')).ranking.rows.length, 1);
   clock = START + 86_400_000;
   assert.deepEqual(await run('cache'), { ranking: null });
+  assert.deepEqual(await run('cache', 7), { ranking: null });
+  assert.deepEqual(await run('cache', 30), { ranking: null });
   clock = START;
   stop();
 
@@ -405,14 +640,17 @@ test('usage discovery separates requests on either side of Beijing midnight from
   ].map(row => JSON.stringify(row)).join('\n') + '\n');
   const values = new Map();
   const index = createUsageIndex({
-    leaderboard: true, now: () => Date.now(),
+    leaderboard: true, now: () => Date.now(), rankDays: 30,
     storage: { keys: async () => [...values.keys()], get: async key => values.get(key),
       set: async (key, value) => values.set(key, value), delete: async key => values.delete(key) },
-    discover: (cutoff, rankDay) => discoverUsageUnits(cutoff, { roots: { pi: [dir] }, includeDefaults: false, rankDay })
+    discover: (cutoff, rankDay, rankFrom) => discoverUsageUnits(cutoff, { roots: { pi: [dir] }, includeDefaults: false, rankDay, rankFrom })
   });
   assert.equal(index.leaderboardUsage().ready, false);
   await index.refresh();
   const current = index.leaderboardUsage();
   assert.equal(current.ready, true);
   assert.equal(current.tokens, 50);
+  const history = index.leaderboardHistory();
+  assert.equal(history.ready, true);
+  assert.deepEqual(history.scores, [{ day: leaderboardDay(start - 1), tokens: 15 }, { day, tokens: 50 }]);
 });
