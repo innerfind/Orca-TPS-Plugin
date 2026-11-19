@@ -9,6 +9,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { createLeaderboardServer } from '../server/app.mjs';
 import { openLeaderboardStore } from '../server/store.mjs';
 import { startLeaderboard } from '../src/leaderboard.mjs';
+import { createAvatarCache } from '../src/leaderboard-avatars.mjs';
 import { discoverUsageUnits } from '../src/data.mjs';
 import { createUsageIndex, leaderboardDay, leaderboardDayStart } from '../src/usage-summary.mjs';
 
@@ -414,6 +415,7 @@ test('login starts ten-second sync, restored login resumes it, and logout stops 
   const api = await fixture(t);
   const storage = new Map(), secrets = new Map(), handlers = new Map();
   const requests = [];
+  let avatarDownloads = 0;
   const installationIds = [];
   storage.set('leaderboard:upload', { enabled: false, interval: 60 });
   const orca = {
@@ -430,6 +432,12 @@ test('login starts ten-second sync, restored login resumes it, and logout stops 
   const launch = () => startLeaderboard(orca, {
     endpoint: api.endpoint, now: () => new Date(api.clock()),
     readUsage: async () => ({ day: TODAY, tokens, ready: true }),
+    avatarFetcher: async url => {
+      avatarDownloads += 1;
+      if (url.href === 'https://github.com/alice.png?size=64') return Response.redirect('https://avatars.githubusercontent.com/u/1', 302);
+      assert.equal(url.href, 'https://avatars.githubusercontent.com/u/1?s=64');
+      return new Response('avatar', { headers: { 'content-type': 'image/png' } });
+    },
     fetcher: (url, options) => {
       requests.push({ path: url.pathname, method: options.method, authenticated: Boolean(options.headers.Authorization) });
       if (url.pathname === '/api/today/submit') installationIds.push(JSON.parse(options.body).installationId);
@@ -462,6 +470,11 @@ test('login starts ten-second sync, restored login resumes it, and logout stops 
   assert.equal(restored.signedIn, true);
   assert.equal(restored.nextAutomaticAt, api.clock() + 10_000);
   assert.equal(requests.length, beforeRestore);
+  const image = { image: 'data:image/png;base64,YXZhdGFy' };
+  assert.deepEqual(await run('avatar', { username: 'alice' }), image);
+  assert.deepEqual(await run('avatar', { username: 'alice' }), image);
+  assert.deepEqual(await run('avatar', { username: 'other' }), { image: null });
+  assert.equal(avatarDownloads, 2);
   assert.equal((await run('state')).board.username, 'alice');
   assert.deepEqual(requests.at(-1), { path: '/api/today', method: 'GET', authenticated: false });
   tokens = 700;
@@ -529,6 +542,61 @@ test('login starts ten-second sync, restored login resumes it, and logout stops 
   assert.equal(expired.nextAutomaticAt, null);
   assert.equal(secrets.size, 0);
   assert.equal((await run('cache')).ranking.rows.length, 1);
+});
+
+test('avatar downloads are bounded and reject non-image or oversized replies', async () => {
+  const release = Promise.withResolvers();
+  const calls = [];
+  let now = START;
+  const cache = createAvatarCache({ now: () => now, async fetcher(url, options) {
+    assert.equal(options.credentials, 'omit');
+    if (url.hostname === 'github.com') {
+      assert.equal(options.redirect, 'manual');
+      const id = Number(/^\/player(\d+)\.png$/.exec(url.pathname)?.[1]);
+      calls.push(id);
+      await release.promise;
+      return Response.redirect(`https://avatars.githubusercontent.com/u/${id}`, 302);
+    }
+    assert.equal(url.hostname, 'avatars.githubusercontent.com');
+    assert.equal(options.redirect, 'error');
+    const id = Number(url.pathname.split('/').at(-1));
+    if (id === 4) return new Response('<svg/>', { headers: { 'content-type': 'image/svg+xml' } });
+    if (id === 5) return new Response(new Uint8Array(32 * 1024 + 1), { headers: { 'content-type': 'image/png' } });
+    return new Response('avatar', { headers: { 'content-type': 'image/png' } });
+  } });
+  const requests = [1, 1, 2, 3, 4, 5].map(id => cache.get('player' + id));
+  assert.deepEqual(calls, [1, 2, 3]);
+  assert.equal(await cache.get('1/../2'), null);
+  release.resolve();
+  const image = 'data:image/png;base64,YXZhdGFy';
+  assert.deepEqual(await Promise.all(requests), [image, image, image, image, null, null]);
+  assert.deepEqual(calls, [1, 2, 3, 4, 5]);
+  assert.equal(await cache.get('player4'), null);
+  assert.deepEqual(calls, [1, 2, 3, 4, 5]);
+  now += 5 * 60_000;
+  assert.equal(await cache.get('player4'), null);
+  assert.equal(await cache.get('player1'), image);
+  assert.deepEqual(calls, [1, 2, 3, 4, 5, 4]);
+});
+
+test('avatar lookup by GitHub login accepts only the expected image redirect', async () => {
+  const calls = [];
+  const cache = createAvatarCache({ async fetcher(url, options) {
+    calls.push([url.href, options.redirect]);
+    if (url.pathname === '/alice.png') return Response.redirect('https://avatars.githubusercontent.com/u/1?s=64', 302);
+    if (url.pathname === '/bob.png') return Response.redirect('https://example.test/u/2', 302);
+    return new Response('avatar', { headers: { 'content-type': 'image/png' } });
+  } });
+  const image = 'data:image/png;base64,YXZhdGFy';
+  assert.equal(await cache.get('Alice'), image);
+  assert.equal(await cache.get('alice'), image);
+  assert.equal(await cache.get('bob'), null);
+  assert.equal(await cache.get('alice/..'), null);
+  assert.deepEqual(calls, [
+    ['https://github.com/alice.png?size=64', 'manual'],
+    ['https://avatars.githubusercontent.com/u/1?s=64', 'error'],
+    ['https://github.com/bob.png?size=64', 'manual']
+  ]);
 });
 
 test('logout prevents retrying or recording an earlier automatic submission', async t => {
@@ -840,7 +908,7 @@ test('the plugin restores public rankings without the network and expires them a
   const stored = new Map();
   const row = { rank: 1, username: 'alice', tokens: 5, submittedAt: START };
   const endpoint = 'http://127.0.0.1:6789';
-  let clock = START, offline = false, fetches = 0, rankingWrites = 0, handle;
+  let clock = START, offline = false, fetches = 0, rankingWrites = 0, avatarRequests = 0, handle;
   const orca = {
     storage: {
       get: async key => stored.get(key),
@@ -853,6 +921,11 @@ test('the plugin restores public rankings without the network and expires them a
   };
   const launch = address => startLeaderboard(orca, {
     endpoint: address, now: () => new Date(clock), readUsage: async () => undefined,
+    avatarFetcher: async url => {
+      avatarRequests += 1;
+      return url.hostname === 'github.com' ? Response.redirect('https://avatars.githubusercontent.com/u/1', 302)
+        : new Response('avatar', { headers: { 'content-type': 'image/png' } });
+    },
     fetcher: async url => {
       fetches++;
       if (offline) throw new Error('offline');
@@ -868,6 +941,9 @@ test('the plugin restores public rankings without the network and expires them a
   assert.equal(fetches, 0);
   assert.equal((await run('state')).board.rows[0].mine, false);
   assert.equal((await run('state')).board.authenticated, false);
+  assert.deepEqual(await handle({ action: 'avatar', username: 'ALICE' }), { image: 'data:image/png;base64,YXZhdGFy' });
+  assert.deepEqual(await handle({ action: 'avatar', username: 'bob' }), { image: null });
+  assert.equal(avatarRequests, 2);
   assert.equal(rankingWrites, 1);
   assert.deepEqual(stored.get('leaderboard:ranking'), { origin: endpoint, day: TODAY, rows: [row], updatedAt: START });
   assert.deepEqual(await run('cache', 7), { ranking: null });

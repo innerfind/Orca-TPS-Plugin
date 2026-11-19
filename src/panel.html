@@ -145,6 +145,15 @@
     .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .ladder-status:empty, .ladder-mine:empty { display: none; }
     .ladder-identity { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-width: 0; }
+    .ladder-account-name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .ladder-avatar {
+      display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px;
+      border-radius: 50%; overflow: hidden; background: var(--button-bg);
+      color: var(--muted);
+    }
+    .ladder-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .ladder-avatar svg { display: block; width: 78%; height: 78%; }
+    .ladder-account-name .ladder-avatar { width: 32px; height: 32px; }
     .ladder-user-grid, .ladder-badges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 8px; }
     .ladder-user-grid { margin-top: 12px; row-gap: 5px; align-items: start; }
     .ladder-user-stat { min-width: 0; margin: 0; padding-inline: 2px; text-align: center; }
@@ -431,7 +440,10 @@
         </div>
         <div id="ladder-account" hidden>
           <div class="ladder-identity">
-            <p class="ladder-mine" id="ladder-mine" dir="auto"></p>
+            <div class="ladder-account-name">
+              <span class="ladder-avatar" id="ladder-account-avatar" aria-hidden="true"></span>
+              <p class="ladder-mine" id="ladder-mine" dir="auto"></p>
+            </div>
             <button class="refresh ladder-control" id="ladder-logout" type="button"><span data-i18n="sign-out"></span></button>
           </div>
           <div class="ladder-user-grid" data-i18n-aria-label="personal-ranking">
@@ -556,6 +568,13 @@
     </section>
   </main>
 
+  <template id="ladder-avatar-fallback">
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path fill="currentColor" d="M12 2c-3.6 0-6.5 3.6-7.5 8.2L3 18.4 6.1 21h11.8l3.1-2.6-1.5-8.2C18.5 5.6 15.6 2 12 2Z"/>
+      <path fill="var(--button-bg)" d="m12 6-4.1 3.2L7 14.4l2.3 3.3h5.4l2.3-3.3-.9-5.2Z"/>
+      <path fill="currentColor" d="M8.9 11.8h2v1.7h-2zm4.2 0h2v1.7h-2z"/>
+    </svg>
+  </template>
   <template id="record-template">
     <li class="record-card" data-testid="record-card">
       <div class="card-top">
@@ -1350,6 +1369,39 @@
         return { code: 'unavailable' };
       }
 
+      const observedAvatars = new Set();
+      const avatarObserver = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
+        for (const { target, isIntersecting } of entries) {
+          if (!isIntersecting || group.hidden || !observedAvatars.delete(target)) continue;
+          avatarObserver.unobserve(target);
+          void loadAvatar(target);
+        }
+      }, { rootMargin: '48px 0px' }) : null;
+
+      async function loadAvatar(avatar) {
+        const username = avatar.dataset.username;
+        const { image } = await request('avatar', { username });
+        if (typeof image !== 'string' || !/^data:image\/(?:png|jpeg|webp|gif);base64,/.test(image)) return;
+        const stillCurrent = () => !lifetime.signal.aborted && avatar.isConnected && avatar.dataset.username === username;
+        if (!stillCurrent()) return;
+        const img = document.createElement('img');
+        img.alt = '';
+        img.decoding = 'async';
+        img.addEventListener('load', () => { if (stillCurrent()) avatar.replaceChildren(img); }, { once: true });
+        img.src = image;
+      }
+
+      function setAvatar(avatar, username = '') {
+        if (username === avatar.dataset.username) return;
+        avatar.dataset.username = username;
+        avatar.replaceChildren(element('avatar-fallback').content.cloneNode(true));
+        if (observedAvatars.delete(avatar)) avatarObserver.unobserve(avatar);
+        if (username && avatarObserver) {
+          observedAvatars.add(avatar);
+          avatarObserver.observe(avatar);
+        }
+      }
+
       function medal(rank, period) {
         const place = podium[rank - 1];
         if (!place) return null;
@@ -1397,7 +1449,11 @@
           name.textContent = row.username;
           name.dir = 'auto';
           name.title = row.username;
-          user.append(name);
+          const avatar = document.createElement('span');
+          avatar.className = 'ladder-avatar';
+          avatar.setAttribute('aria-hidden', 'true');
+          setAvatar(avatar, row.username);
+          user.append(avatar, name);
           const badge = medal(row.rank, period);
           if (badge) user.append(badge);
           total.textContent = formatTokenMB(row.tokens);
@@ -1408,6 +1464,11 @@
           item.append(rank, user, total, time);
           return item;
         });
+        for (const avatar of observedAvatars) {
+          if (avatar.isConnected) continue;
+          avatarObserver.unobserve(avatar);
+          observedAvatars.delete(avatar);
+        }
       }
 
       function renderAccount(username, account) {
@@ -1431,6 +1492,7 @@
           slot.querySelector('.ladder-medal')?.remove();
           if (place) slot.append(medal(place, period));
         }
+        setAvatar(element('account-avatar'), username);
         element('medals').hidden = !hasMedals;
       }
 
@@ -1778,6 +1840,8 @@
       }, 1000);
       window.addEventListener('pagehide', () => {
         lifetime.abort();
+        avatarObserver?.disconnect();
+        observedAvatars.clear();
         rankingSubscription?.dispose();
         cancelAnimationFrame(leaderboardFrame);
         clearTimeout(retryLogin);

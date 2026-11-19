@@ -2,6 +2,7 @@ import { sourceMessage } from './locales.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { leaderboardDay } from './usage-summary.mjs';
 import { validInstallationId } from './leaderboard-installation.mjs';
+import { createAvatarCache, githubLoginKey } from './leaderboard-avatars.mjs';
 
 const METHOD = 'tps.leaderboard';
 const SECRET = 'leaderboard-session';
@@ -31,7 +32,7 @@ function publicRows(rows, days) {
 
 export function startLeaderboard(orca, {
   readUsage, readHistory, endpoint = process.env.ORCA_TPS_LEADERBOARD_URL || DEFAULT_ENDPOINT,
-  fetcher = fetch, now = () => new Date()
+  fetcher = fetch, avatarFetcher = fetch, now = () => new Date()
 }) {
   const base = new URL(endpoint);
   if (base.username || base.password || (base.protocol !== 'https:' &&
@@ -39,6 +40,7 @@ export function startLeaderboard(orca, {
     throw new Error(sourceMessage('notice.https-required'));
   }
   const lifetime = new AbortController();
+  const avatars = createAvatarCache({ fetcher: avatarFetcher, now: () => now().getTime(), signal: lifetime.signal });
   const host = orca.host;
   let token = '', login, submitting, uploadingKind = null, scheduling = false, nextAttempt = null;
   let credentialWrite = Promise.resolve();
@@ -531,6 +533,13 @@ export function startLeaderboard(orca, {
     if (payload?.action === 'usage') return { local: await readUsage() };
     await ready;
     switch (payload?.action) {
+      case 'avatar': {
+        const key = githubLoginKey(payload.username);
+        if (key === null) return { image: null };
+        const known = githubLoginKey(username) === key || [...rankingCaches.values()].some(cache =>
+          cache.value?.rows.some(row => githubLoginKey(row.username) === key));
+        return { image: known ? await avatars.get(key) : null };
+      }
       case 'session': return panelState(days);
       case 'state': return state(days);
       case 'login': return beginLogin();
