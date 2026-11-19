@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import { leaderboardDay, leaderboardDayStart, MAX_WINDOW_DAYS } from '../src/usage-summary.mjs';
+import { validInstallationId } from '../src/leaderboard-installation.mjs';
 
 const TEN_MINUTES = 10 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
@@ -32,6 +33,11 @@ export function openLeaderboardStore(filename) {
       tokens INTEGER, submitted_at INTEGER NOT NULL, PRIMARY KEY(day, account)
     );
     CREATE INDEX IF NOT EXISTS score_order ON scores(day, tokens DESC, submitted_at, account);
+    CREATE TABLE IF NOT EXISTS installation_scores (
+      day TEXT NOT NULL, account INTEGER NOT NULL, installation_id TEXT NOT NULL, tokens INTEGER NOT NULL,
+      PRIMARY KEY(day, account, installation_id),
+      FOREIGN KEY(day, account) REFERENCES scores(day, account) ON DELETE CASCADE
+    );
     CREATE TABLE IF NOT EXISTS score_updates (
       day TEXT NOT NULL, account INTEGER NOT NULL REFERENCES accounts(id),
       updated_at INTEGER NOT NULL, PRIMARY KEY(day, account)
@@ -42,6 +48,10 @@ export function openLeaderboardStore(filename) {
     );
     CREATE TABLE IF NOT EXISTS upload_attempt_clock (
       account INTEGER PRIMARY KEY REFERENCES accounts(id), attempted_at INTEGER NOT NULL, consecutive INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS installation_upload_clock (
+      account INTEGER NOT NULL REFERENCES accounts(id), installation_id TEXT NOT NULL,
+      attempted_at INTEGER NOT NULL, consecutive INTEGER NOT NULL, PRIMARY KEY(account, installation_id)
     );
     CREATE TABLE IF NOT EXISTS attempts (
       day TEXT NOT NULL, account INTEGER NOT NULL REFERENCES accounts(id), request_id TEXT NOT NULL,
@@ -172,17 +182,25 @@ export function openLeaderboardStore(filename) {
     return { ...state, rank, rows };
   }
 
-  function uploadGate(account, day, { requestId, fingerprint }, now) {
+  function uploadGate(account, day, { requestId, fingerprint, installationId }, now) {
     if (get('SELECT banned FROM accounts WHERE id=?', account)?.banned) return 'banned';
     if (get('SELECT 1 FROM locks WHERE day=? AND account=?', day, account)) return 'locked';
     const oldAttempt = get(`
       SELECT outcome FROM attempts WHERE day=? AND account=? AND request_id=? AND fingerprint=?
     `, day, account, requestId, fingerprint);
     if (oldAttempt) return oldAttempt.outcome;
-    const recent = get('SELECT attempted_at, consecutive FROM upload_attempt_clock WHERE account=?', account);
+    const identified = validInstallationId(installationId);
+    const recent = identified
+      ? get('SELECT attempted_at, consecutive FROM installation_upload_clock WHERE account=? AND installation_id=?', account, installationId)
+      : get('SELECT attempted_at, consecutive FROM upload_attempt_clock WHERE account=?', account);
     const consecutive = recent && now - recent.attempted_at < RAPID_UPLOAD_INTERVAL ? recent.consecutive + 1 : 0;
-    run(`INSERT INTO upload_attempt_clock VALUES (?, ?, ?) ON CONFLICT(account)
-      DO UPDATE SET attempted_at=excluded.attempted_at, consecutive=excluded.consecutive`, account, now, consecutive);
+    if (identified) {
+      run(`INSERT INTO installation_upload_clock VALUES (?, ?, ?, ?) ON CONFLICT(account, installation_id)
+        DO UPDATE SET attempted_at=excluded.attempted_at, consecutive=excluded.consecutive`, account, installationId, now, consecutive);
+    } else {
+      run(`INSERT INTO upload_attempt_clock VALUES (?, ?, ?) ON CONFLICT(account)
+        DO UPDATE SET attempted_at=excluded.attempted_at, consecutive=excluded.consecutive`, account, now, consecutive);
+    }
     if (consecutive <= 3) return null;
     banAccount(account, RAPID_UPLOAD_REASON);
     return 'banned';
@@ -206,24 +224,40 @@ export function openLeaderboardStore(filename) {
   }
 
   const validTokens = (tokens, maxTokens) => Number.isSafeInteger(tokens) && tokens >= 1 && tokens <= maxTokens;
+  const validInstallation = value => value === undefined || validInstallationId(value);
   const reusedRequest = (account, day, requestId) =>
     Boolean(get('SELECT 1 FROM attempts WHERE day=? AND account=? AND request_id=?', day, account, requestId));
   const historyInitialized = account => Boolean(get('SELECT 1 FROM score_initializations WHERE account=?', account));
 
+  function saveInstallationScore(day, account, installationId, tokens) {
+    run(`INSERT INTO installation_scores VALUES (?, ?, ?, ?)
+      ON CONFLICT(day, account, installation_id) DO UPDATE SET tokens=excluded.tokens`, day, account, installationId, tokens);
+  }
+
   function submit(account, input, now, maxTokens) {
-    const { day: requestedDay, tokens, requestId } = input;
+    const { day: requestedDay, installationId, tokens, requestId } = input;
     const day = leaderboardDay(now);
     return transaction(() => {
       const blocked = uploadGate(account, day, input, now);
       if (blocked) return blocked;
       const score = get('SELECT tokens FROM scores WHERE day=? AND account=?', day, account);
       if (score?.tokens === null) return 'removed';
-      if (requestedDay !== day || !validTokens(tokens, maxTokens) || reusedRequest(account, day, requestId)) {
+      if (requestedDay !== day || !validInstallation(installationId) || !validTokens(tokens, maxTokens) || reusedRequest(account, day, requestId)) {
         return invalidUpload(account, day, input, now);
       }
+      if (installationId === undefined && get('SELECT 1 FROM installation_scores WHERE day=? AND account=? LIMIT 1', day, account)) {
+        return recordAttempt(account, day, input, 'upgrade_required', now);
+      }
       if (nextUpload(account, now) !== null) return recordAttempt(account, day, input, 'too_soon', now);
+      const otherTokens = installationId === undefined ? 0 : get(`
+        SELECT COALESCE(SUM(tokens), 0) AS tokens FROM installation_scores WHERE day=? AND account=? AND installation_id<>?
+      `, day, account, installationId).tokens;
+      const total = otherTokens + tokens;
+      if (!Number.isSafeInteger(total)) return invalidUpload(account, day, input, now);
+      // Legacy totals have no installation breakdown. The first identified upload replaces that day's legacy total.
       run(`INSERT INTO scores(day, account, tokens, submitted_at) VALUES (?, ?, ?, ?)
-        ON CONFLICT(day, account) DO UPDATE SET tokens=excluded.tokens`, day, account, tokens, now);
+        ON CONFLICT(day, account) DO UPDATE SET tokens=excluded.tokens`, day, account, total, now);
+      if (installationId !== undefined) saveInstallationScore(day, account, installationId, tokens);
       run(`INSERT INTO score_updates VALUES (?, ?, ?)
         ON CONFLICT(day, account) DO UPDATE SET updated_at=excluded.updated_at`, day, account, now);
       return recordAttempt(account, day, input, 'accepted', now);
@@ -231,22 +265,24 @@ export function openLeaderboardStore(filename) {
   }
 
   function initializeHistory(account, input, now, maxTokens) {
-    const { day: requestedDay, scores, requestId } = input;
+    const { day: requestedDay, installationId, scores, requestId } = input;
     const day = leaderboardDay(now);
     return transaction(() => {
       if (historyInitialized(account)) return 'initialized';
       const blocked = uploadGate(account, day, input, now);
       if (blocked) return blocked;
       const allowed = new Set(Array.from({ length: MAX_WINDOW_DAYS }, (_, index) => leaderboardDay(now - index * DAY)));
-      if (requestedDay !== day || reusedRequest(account, day, requestId) || !Array.isArray(scores) || scores.length === 0 ||
+      if (requestedDay !== day || !validInstallation(installationId) || reusedRequest(account, day, requestId) || !Array.isArray(scores) || scores.length === 0 ||
           scores.length > MAX_WINDOW_DAYS || !scores.every(row => allowed.delete(row?.day) && validTokens(row.tokens, maxTokens))) {
         return invalidUpload(account, day, input, now);
       }
       if (nextUpload(account, now) !== null) return recordAttempt(account, day, input, 'too_soon', now);
       let inserted = 0;
       for (const row of scores) {
-        inserted += run('INSERT INTO scores(day, account, tokens, submitted_at) VALUES (?, ?, ?, ?) ON CONFLICT(day, account) DO NOTHING',
+        const added = run('INSERT INTO scores(day, account, tokens, submitted_at) VALUES (?, ?, ?, ?) ON CONFLICT(day, account) DO NOTHING',
           row.day, account, row.tokens, now).changes;
+        if (added && installationId !== undefined) saveInstallationScore(row.day, account, installationId, row.tokens);
+        inserted += added;
       }
       run('INSERT INTO score_initializations VALUES (?, ?)', account, inserted ? now : null);
       return recordAttempt(account, day, input, 'accepted', now);
@@ -267,7 +303,10 @@ export function openLeaderboardStore(filename) {
       const changed = banned ? banAccount(account, reason.trim()) :
         run('UPDATE accounts SET banned=0 WHERE id=? AND banned=1', account).changes > 0;
       if (!changed) return false;
-      if (!banned) run('DELETE FROM upload_attempt_clock WHERE account=?', account);
+      if (!banned) {
+        run('DELETE FROM upload_attempt_clock WHERE account=?', account);
+        run('DELETE FROM installation_upload_clock WHERE account=?', account);
+      }
       audit(actor, banned ? 'ban' : 'unban', banned ? account + ' · ' + reason.trim() : String(account), now);
       return true;
     });
@@ -278,6 +317,7 @@ export function openLeaderboardStore(filename) {
     const filter = (day ? ' AND day=?' : '') + (account ? ' AND account=?' : '');
     const params = [...(day ? [day] : []), ...(account ? [account] : [])];
     transaction(() => {
+      run('DELETE FROM installation_scores WHERE 1=1' + filter, ...params);
       run('UPDATE scores SET tokens=NULL WHERE day>=?' + filter, first, ...params);
       run('DELETE FROM scores WHERE day<?' + filter, first, ...params);
       audit(actor, account ? 'delete' : 'clear', [day || 'all', account].filter(Boolean).join('/'), now);
@@ -310,11 +350,14 @@ export function openLeaderboardStore(filename) {
 
   function prune(now) {
     const day = leaderboardDay(now);
+    const first = leaderboardDay(now - (MAX_WINDOW_DAYS - 1) * DAY);
     transaction(() => {
       run('DELETE FROM sessions WHERE expires<=?', now);
       run('DELETE FROM attempts WHERE day<?', day);
       run('DELETE FROM locks WHERE day<?', day);
-      run('DELETE FROM scores WHERE day<? AND tokens IS NULL', leaderboardDay(now - (MAX_WINDOW_DAYS - 1) * DAY));
+      run('DELETE FROM installation_scores WHERE day<?', first);
+      run('DELETE FROM installation_upload_clock WHERE attempted_at<=?', now - RAPID_UPLOAD_INTERVAL);
+      run('DELETE FROM scores WHERE day<? AND tokens IS NULL', first);
       run(`DELETE FROM score_updates WHERE updated_at<=? AND NOT EXISTS (
         SELECT 1 FROM scores WHERE scores.day=score_updates.day AND scores.account=score_updates.account
       )`, now - UPLOAD_INTERVAL);
