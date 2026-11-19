@@ -170,16 +170,16 @@ test('remote usage counts the full history once per host and keeps totals when i
   });
   const stored = new Map(), day = localDayKey(completed.getTime());
   const local = { key: 'local-unit', stamp: 'same', bytes: 5, mtimeMs: completed.getTime(),
-    read: async rankDay => ({ days: { [day]: { claude: { 'local-model': [1, 2, 1, 0, 0, 0, 0, 0] } } },
-      leaderboardDays: { [rankDay]: 3 }, leaderboardFrom: rankDay }) };
+    read: async (rankDay, rankFrom) => ({ days: { [day]: { claude: { 'local-model': [1, 2, 1, 0, 0, 0, 0, 0] } } },
+      leaderboardDays: { [rankDay]: 3 }, leaderboardFrom: rankFrom }) };
   const index = createUsageIndex({
     now: () => completed.getTime(),
-    leaderboard: true,
+    leaderboard: true, rankDays: 30,
     storage: { keys: async () => [...stored.keys()], get: async key => stored.get(key),
       set: async (key, value) => stored.set(key, value), delete: async key => stored.delete(key) },
-    async discover(cutoffMs, rankDay) {
-      const remote = await reader.discover(cutoffMs, rankDay);
-      return { ...remote, descriptors: [{ ...local, read: () => local.read(rankDay) }, ...remote.descriptors] };
+    async discover(cutoffMs, rankDay, rankFrom) {
+      const remote = await reader.discover(cutoffMs, rankDay, rankFrom);
+      return { ...remote, descriptors: [{ ...local, read: () => local.read(rankDay, rankFrom) }, ...remote.descriptors] };
     }
   });
   async function refresh() {
@@ -192,6 +192,8 @@ test('remote usage counts the full history once per host and keeps totals when i
     assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
     assert.equal(index.leaderboardUsage().tokens, sessions * 5 + 3);
     assert.equal(index.leaderboardUsage().ready, true);
+    assert.equal(index.leaderboardHistory().ready, true);
+    assert.equal(index.leaderboardHistory().scores[0].tokens, sessions * 5 + 3);
     assert.equal(launches, 1);
     const initialWrites = writes;
     await refresh();

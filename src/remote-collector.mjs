@@ -3,7 +3,7 @@ import { gzipSync } from 'node:zlib';
 import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { createLiveSessionReader, discoverUsageUnits, normalizeComparePath } from './data.mjs';
-import { USAGE_READ_BATCH } from './usage-summary.mjs';
+import { leaderboardDay, leaderboardDayStart, MAX_WINDOW_DAYS, USAGE_READ_BATCH } from './usage-summary.mjs';
 
 export const COLLECTOR_FILES = ['remote-collector.mjs', 'data.mjs', 'data-paths.mjs', 'parsers.mjs', 'usage-summary.mjs'];
 export const MAX_RESPONSE_BASE64 = 1024 * 1024;
@@ -61,16 +61,22 @@ export function createRemoteUsageScan(discover = discoverUsageUnits) {
   let units, descriptors;
   return async request => {
     if (request.type === 'list') {
-      const { offset, cutoffMs, timeZone, rankDay } = request;
+      const { offset, cutoffMs, timeZone, rankDay, rankFrom = rankDay } = request;
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('offset');
       if (offset === 0) {
         if (!Number.isFinite(cutoffMs) || cutoffMs < 0 || !clean(timeZone) || timeZone.length > 100) throw new Error('calendar');
-        if (rankDay !== undefined && (typeof rankDay !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(rankDay))) throw new Error('calendar');
+        if (rankDay !== undefined || rankFrom !== undefined) {
+          const date = /^\d{4}-\d{2}-\d{2}$/;
+          if (!date.test(rankDay) || !date.test(rankFrom)) throw new Error('calendar');
+          const end = leaderboardDayStart(rankDay), start = leaderboardDayStart(rankFrom);
+          if (!Number.isFinite(start) || !Number.isFinite(end) || leaderboardDay(start) !== rankFrom ||
+              leaderboardDay(end) !== rankDay || start > end || end - start >= MAX_WINDOW_DAYS * 86_400_000) throw new Error('calendar');
+        }
         // Usage has its own short-lived SSH stream. Date buckets match the desktop even
         // when the machine that owns the logs has another system time zone.
         new Intl.DateTimeFormat('en', { timeZone });
         process.env.TZ = timeZone;
-        units = new Map((await discover(cutoffMs, { rankDay })).map(unit => [unit.key, unit]));
+        units = new Map((await discover(cutoffMs, { rankDay, rankFrom })).map(unit => [unit.key, unit]));
         descriptors = [...units.values()].map(({ key, stamp, bytes, mtimeMs }) => ({
           key, stamp: createHash('sha256').update(stamp).digest('hex').slice(0, 24), bytes, mtimeMs
         }));

@@ -3,7 +3,7 @@ import { readActiveConversation } from './active-conversation.mjs';
 import { createTpsController } from './controller.mjs';
 import { createRemoteChannelReader, createRemoteUsageReader } from './remote-channel.mjs';
 import { createChannelCache } from './channel-cache.mjs';
-import { createUsageIndex } from './usage-summary.mjs';
+import { createUsageIndex, MAX_WINDOW_DAYS } from './usage-summary.mjs';
 import { startLeaderboard } from './leaderboard.mjs';
 
 // Backfill runs quickly while files are pending; once every unit is current, refresh slowly.
@@ -32,9 +32,10 @@ export default async function activate(orca) {
   usage = createUsageIndex({
     storage: orca.storage,
     leaderboard: true,
-    async discover(cutoffMs, rankDay) {
+    rankDays: MAX_WINDOW_DAYS,
+    async discover(cutoffMs, rankDay, rankFrom) {
       const [localUnits, remoteUnits] = await Promise.all([
-        discoverUsageUnits(cutoffMs, { rankDay }), history.discover(cutoffMs, rankDay)
+        discoverUsageUnits(cutoffMs, { rankDay, rankFrom }), history.discover(cutoffMs, rankDay, rankFrom)
       ]);
       return { ...remoteUnits, descriptors: [...localUnits, ...remoteUnits.descriptors] };
     },
@@ -47,10 +48,16 @@ export default async function activate(orca) {
   });
   const index = usage;
   try {
-    stopLeaderboard = startLeaderboard(orca, { async readUsage() {
-      await index.ready();
-      return index.leaderboardUsage();
-    } });
+    stopLeaderboard = startLeaderboard(orca, {
+      async readUsage() {
+        await index.ready();
+        return index.leaderboardUsage();
+      },
+      async readHistory() {
+        await index.ready();
+        return index.leaderboardHistory();
+      }
+    });
   } catch { orca.log('天梯榜地址无效，请检查配置。'); }
   schedule(orca, FIRST_DELAY_MS);
 }

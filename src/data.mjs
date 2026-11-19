@@ -1039,13 +1039,12 @@ export async function readCodexUsageFile(file, minDay) {
   return days;
 }
 
-function rankedUsage(day) {
-  const start = leaderboardDayStart(day);
-  return day ? { day, start, end: start + 86_400_000, totals: {} } : undefined;
+function rankedUsage(window) {
+  return window ? { ...window, totals: {} } : undefined;
 }
 
 function usageResult(days, rank) {
-  return rank ? { days, leaderboardDays: rank.totals, leaderboardFrom: rank.day } : days;
+  return rank ? { days, leaderboardDays: rank.totals, leaderboardFrom: rank.from } : days;
 }
 
 async function addCodexStreamRecords(days, file, minDay, leaderboardDays) {
@@ -1064,7 +1063,7 @@ async function addFileRecords(days, provider, file, minDay, isSubagent, leaderbo
   accumulateRecords(days, provider, parsed.records, { minDay, leaderboardDays });
 }
 
-async function fileUsageUnit(provider, file, rankDay) {
+async function fileUsageUnit(provider, file, rankWindow) {
   // Claude keeps subagent calls in <session>/subagents; they belong to the parent session's unit.
   const subagents = provider === 'claude'
     ? (await collectClaudeSubagentCandidates(file.path, path.basename(file.path, '.jsonl'))).map(candidate => ({ path: candidate.path, size: candidate.info.size, mtimeMs: candidate.info.mtimeMs }))
@@ -1077,7 +1076,7 @@ async function fileUsageUnit(provider, file, rankDay) {
     bytes: file.size + subagents.reduce((sum, item) => sum + item.size, 0),
     mtimeMs: file.mtimeMs,
     read: async () => {
-      const minDay = dayKeyAgo(Date.now(), HISTORY_DAYS - 1), days = {}, rank = rankedUsage(rankDay);
+      const minDay = dayKeyAgo(Date.now(), HISTORY_DAYS - 1), days = {}, rank = rankedUsage(rankWindow);
       if (provider === 'codex') await addCodexStreamRecords(days, file.path, minDay, rank);
       else await addFileRecords(days, provider, file.path, minDay, false, rank);
       for (const item of subagents) await addFileRecords(days, 'claude', item.path, minDay, true, rank);
@@ -1086,7 +1085,7 @@ async function fileUsageUnit(provider, file, rankDay) {
   };
 }
 
-async function readOpenCodeSession(dbPath, v2, sessionId, rankDay) {
+async function readOpenCodeSession(dbPath, v2, sessionId, rankWindow) {
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
   try {
@@ -1094,7 +1093,7 @@ async function readOpenCodeSession(dbPath, v2, sessionId, rankDay) {
     const messageTable = v2 ? 'session_message' : 'message', orderColumn = v2 ? 'seq' : 'rowid';
     const rows = db.prepare(`SELECT id,${v2 ? 'type' : 'NULL AS type'},time_created,${projectedData()}
       FROM ${messageTable} WHERE session_id=? ORDER BY ${orderColumn} ASC`).all(sessionId);
-    const days = {}, rank = rankedUsage(rankDay);
+    const days = {}, rank = rankedUsage(rankWindow);
     accumulateRecords(days, v2 ? 'opencode2' : 'opencode', parseOpenCodeRows(rows, v2, { limit: Infinity }),
       { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1), leaderboardDays: rank });
     return usageResult(days, rank);
@@ -1102,7 +1101,7 @@ async function readOpenCodeSession(dbPath, v2, sessionId, rankDay) {
 }
 
 /** One unit per OpenCode session updated since cutoffMs; the unit's stamp includes its message count. */
-async function openCodeUsageUnits(dbPath, cutoffMs, rankDay) {
+async function openCodeUsageUnits(dbPath, cutoffMs, rankWindow) {
   const database = await info(dbPath);
   if (!database?.isFile()) return [];
   let DatabaseSync;
@@ -1127,7 +1126,7 @@ async function openCodeUsageUnits(dbPath, cutoffMs, rankDay) {
           stamp: `${row.time_updated}:${count}`,
           bytes: count * 1024,
           mtimeMs: Number(row.time_updated) || 0,
-          read: () => readOpenCodeSession(dbPath, v2, row.id, rankDay)
+          read: () => readOpenCodeSession(dbPath, v2, row.id, rankWindow)
         });
       }
     }
@@ -1137,7 +1136,7 @@ async function openCodeUsageUnits(dbPath, cutoffMs, rankDay) {
 }
 
 /** Antigravity: one unit per conversation whose transcript was written since cutoffMs; timing comes from its native store. */
-async function antigravityUsageUnits(brainRoot, cutoffMs, rankDay) {
+async function antigravityUsageUnits(brainRoot, cutoffMs, rankWindow) {
   if (!(await info(brainRoot))?.isDirectory()) return [];
   let entries;
   try { entries = await readdir(brainRoot, { withFileTypes: true }); }
@@ -1153,14 +1152,14 @@ async function antigravityUsageUnits(brainRoot, cutoffMs, rankDay) {
       stamp: `${metadata.size}:${metadata.mtimeMs}:${await antigravityNativeStamp(transcript)}`,
       bytes: metadata.size,
       mtimeMs: metadata.mtimeMs,
-      read: () => readAntigravityUsage(transcript, entry.name, rankDay)
+      read: () => readAntigravityUsage(transcript, entry.name, rankWindow)
     });
   }
   return units;
 }
 
-async function readAntigravityUsage(transcript, conversationId, rankDay) {
-  const days = {}, notes = [], rank = rankedUsage(rankDay);
+async function readAntigravityUsage(transcript, conversationId, rankWindow) {
+  const days = {}, notes = [], rank = rankedUsage(rankWindow);
   const text = await readFile(transcript, 'utf8');
   const complete = text.slice(0, text.lastIndexOf('\n') + 1);
   const native = await readAntigravityTimings(transcript, message => notes.push(message));
@@ -1172,6 +1171,8 @@ async function readAntigravityUsage(transcript, conversationId, rankDay) {
 /** Descriptors for the usage index: Codex, Claude and Pi session files, OpenCode sessions, and Antigravity conversations. */
 export async function discoverUsageUnits(cutoffMs, options = {}) {
   const roots = await configuredRoots(options.roots, options.includeDefaults !== false);
+  const { rankDay, rankFrom = rankDay } = options;
+  const rankWindow = rankDay ? { from: rankFrom, start: leaderboardDayStart(rankFrom), end: leaderboardDayStart(rankDay) + 86_400_000 } : undefined;
   // Mirrors are append-only transcripts. Keep the largest copy; use its modification time to break ties.
   // A sync can give a stale copy a newer mtime, so root order and mtime alone cannot identify the fullest log.
   const units = [];
@@ -1186,13 +1187,13 @@ export async function discoverUsageUnits(cutoffMs, options = {}) {
         }
       }
     }
-    for (const file of selected.values()) units.push(await fileUsageUnit(provider, file, options.rankDay));
+    for (const file of selected.values()) units.push(await fileUsageUnit(provider, file, rankWindow));
   }
   for (const root of (roots.opencode ?? []).slice(0, 10)) {
-    units.push(...await openCodeUsageUnits(root, cutoffMs, options.rankDay));
+    units.push(...await openCodeUsageUnits(root, cutoffMs, rankWindow));
   }
   for (const root of (roots.antigravity ?? []).slice(0, 10)) {
-    units.push(...await antigravityUsageUnits(root, cutoffMs, options.rankDay));
+    units.push(...await antigravityUsageUnits(root, cutoffMs, rankWindow));
   }
   return units;
 }

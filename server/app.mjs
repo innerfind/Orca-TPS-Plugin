@@ -12,7 +12,7 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const challengeOf = value => createHash('sha256').update(value).digest('base64url');
 const tokenPattern = /^[\w-]{43}$/;
 const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
-const statuses = { accepted: 201, invalid: 400, duplicate: 409, removed: 409, too_soon: 429, locked: 429, banned: 403 };
+const statuses = { accepted: 201, initialized: 200, invalid: 400, duplicate: 409, removed: 409, too_soon: 429, locked: 429, banned: 403 };
 const feedback = { updated: '已保存。', rejected: '操作未执行，请检查输入。', forbidden: '该 GitHub 账号没有管理权限。', failed: 'GitHub 登录未完成，请重新登录。' };
 
 function cookieValue(req, name) {
@@ -218,13 +218,25 @@ export function createLeaderboardServer({
     if (!tokenPattern.test(input?.verifier ?? '')) return send(res, 400, { code: 'invalid' });
     const login = browserLogins.get(challengeOf(input.verifier));
     if (!login) return send(res, 202, { code: 'pending' });
-    if (login.expiresAt <= time || login.status === 'consumed') return send(res, 410, { code: 'login_expired' });
+    if (login.expiresAt <= time) return send(res, 410, { code: 'login_expired' });
+    if (login.status === 'consumed') {
+      return input.received === true ? send(res, 200, { ok: true }) : send(res, 410, { code: 'login_expired' });
+    }
     if (login.status === 'pending' || login.status === 'exchanging') return send(res, 202, { code: 'pending' });
-    if (login.status !== 'authorized') return send(res, 410, { code: login.status });
-    const token = issueSession(login.user, 'plugin', time, 30 * 24 * HOUR);
-    login.status = 'consumed';
-    delete login.user;
-    return send(res, 200, { token });
+    if (login.status === 'authorized') {
+      if (input.received === true) return send(res, 202, { code: 'pending' });
+      login.sessionToken = issueSession(login.user, 'plugin', time, 30 * 24 * HOUR);
+      login.status = 'delivered';
+      delete login.user;
+    }
+    if (login.status !== 'delivered') return send(res, 410, { code: login.status });
+    const account = store.session(digest(login.sessionToken), 'plugin', time);
+    if (input.received === true || !account) {
+      login.status = 'consumed';
+      delete login.sessionToken;
+      return input.received === true ? send(res, 200, { ok: true }) : send(res, 410, { code: 'login_expired' });
+    }
+    return send(res, 200, { token: login.sessionToken, username: account.username });
   }
 
   function adminStart(res) {
@@ -352,7 +364,9 @@ export function createLeaderboardServer({
     const token = /^Bearer ([\w-]{43})$/.exec(req.headers.authorization ?? '')?.[1];
     const account = token ? store.session(digest(token), 'plugin', time) : null;
     if (method === 'GET' && route === '/api/today') {
-      const ranking = store.ranking(account?.id ?? null, time);
+      const days = url.searchParams.get('days') ?? '1';
+      if (!['1', '7', '30'].includes(days)) return send(res, 400, { code: 'invalid' });
+      const ranking = store.ranking(account?.id ?? null, time, Number(days));
       const viewer = account ? { authenticated: true, banned: Boolean(account.banned), username: account.username } : { authenticated: false };
       return send(res, 200, { ...viewer, ...ranking });
     }
@@ -361,18 +375,26 @@ export function createLeaderboardServer({
       store.removeSession(digest(token));
       return send(res, 200, { ok: true });
     }
-    if (account.banned) return send(res, 403, { code: 'banned' });
+    if (account.banned) return send(res, 403, { code: 'banned', username: account.username });
     if (method === 'GET' && route === '/api/today/status') return send(res, 200, store.status(account.id, time));
-    if (method === 'POST' && route === '/api/today/submit') {
+    if (method === 'GET' && route === '/api/history/status') {
+      return send(res, 200, { initialized: store.historyInitialized(account.id), ...store.status(account.id, time) });
+    }
+    if (method === 'POST' && (route === '/api/today/submit' || route === '/api/history/init')) {
+      const history = route === '/api/history/init';
       const raw = await readBody(req), requestId = req.headers['idempotency-key'];
       const receivedAt = now();
       const validRequestId = typeof requestId === 'string' && /^[\w-]{16,128}$/.test(requestId);
       const body = validRequestId && req.headers['content-type']?.split(';')[0] === 'application/json' ? parseJson(raw) : null;
-      const code = store.submit(account.id, {
-        day: body?.day, tokens: body?.tokens, requestId: validRequestId ? requestId : randomUUID(),
+      const input = {
+        day: body?.day, tokens: body?.tokens, scores: body?.scores,
+        requestId: (history ? 'history:' : '') + (validRequestId ? requestId : randomUUID()),
         fingerprint: digest(raw ?? 'oversized request')
-      }, receivedAt, maxTokens);
-      return send(res, statuses[code], { code, ...(code === 'banned' ? {} : store.status(account.id, receivedAt)) });
+      };
+      const code = history ? store.initializeHistory(account.id, input, receivedAt, maxTokens) :
+        store.submit(account.id, input, receivedAt, maxTokens);
+      return send(res, statuses[code], { code, username: account.username,
+        ...(code === 'banned' ? {} : store.status(account.id, receivedAt)) });
     }
     return send(res, 404, { code: 'not_found' });
   }

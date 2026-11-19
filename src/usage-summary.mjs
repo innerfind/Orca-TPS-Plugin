@@ -46,7 +46,7 @@ export function accumulateRecords(days, provider, records, { minDay = '', leader
     if (leaderboardDays && record.completedAt >= leaderboardDays.start && record.completedAt < leaderboardDays.end) {
       const tokens = [record.freshInputTokens, record.outputTokens, record.cacheReadTokens, record.cacheCreationTokens]
         .reduce((total, value) => total + numberOr0(value), 0);
-      const { day, totals } = leaderboardDays;
+      const day = leaderboardDay(record.completedAt), { totals } = leaderboardDays;
       totals[day] = (totals[day] ?? 0) + tokens;
     }
     const model = typeof record.model === 'string' && record.model ? record.model.slice(0, 128) : '';
@@ -190,10 +190,10 @@ const validUnit = value => value && typeof value === 'object' && typeof value.st
 const LARGE_UNIT_BYTES = 64 * 1024 * 1024, LARGE_UNIT_INTERVAL_MS = 10 * 60_000;
 const RETRY_MIN_MS = 15_000, RETRY_MAX_MS = 10 * 60_000;
 
-export function createUsageIndex({ storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, leaderboard = false, log = () => {} }) {
+export function createUsageIndex({ storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, leaderboard = false, rankDays = 1, log = () => {} }) {
   const units = new Map();
   let loaded = null, progress = { done: 0, total: 0 }, updatedAt = null;
-  let readyLeaderboardDay = '';
+  let readyLeaderboardDay = '', readyHistoryDay = '';
 
   async function load() {
     const keys = (await storage.keys()).filter(key => key.startsWith(UNIT_KEY_PREFIX));
@@ -215,7 +215,9 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     const refreshAt = now();
     const rankDay = leaderboardDay(refreshAt);
     const rankStart = leaderboardDayStart(rankDay);
-    const discovery = await discover(usageCutoffMs(refreshAt), leaderboard ? rankDay : undefined);
+    const rankFrom = leaderboardDay(rankStart - (rankDays - 1) * 86_400_000);
+    const historyStart = leaderboardDayStart(rankFrom);
+    const discovery = await discover(usageCutoffMs(refreshAt), leaderboard ? rankDay : undefined, leaderboard ? rankFrom : undefined);
     signal?.throwIfAborted();
     const { descriptors, coveredRemoteScopes } = Array.isArray(discovery)
       ? { descriptors: discovery, coveredRemoteScopes: new Set() }
@@ -228,18 +230,22 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
       units.delete(key);
       await storage.delete(UNIT_KEY_PREFIX + key).catch(() => {});
     }
+    const missingToday = (descriptor, current) => descriptor.mtimeMs >= rankStart &&
+      (current?.leaderboardThrough ?? current?.leaderboardFrom) !== rankDay;
+    const missingHistory = (descriptor, current) => descriptor.mtimeMs >= historyStart &&
+      (!current?.leaderboardFrom || current.leaderboardFrom > rankFrom || missingToday(descriptor, current));
     // A large file that is still being written is re-read at most every LARGE_UNIT_INTERVAL_MS; until then the
     // last read stays in effect and counts as up to date.
     const deferred = descriptor => {
       const current = units.get(descriptor.key);
       return current !== undefined && !current.failed && current.stamp !== descriptor.stamp && descriptor.bytes > LARGE_UNIT_BYTES
-        && (!leaderboard || descriptor.mtimeMs < rankStart || current.leaderboardFrom === rankDay)
+        && (!leaderboard || !missingHistory(descriptor, current))
         && now() - (current.readAt ?? 0) < LARGE_UNIT_INTERVAL_MS;
     };
     const needsRead = descriptor => {
       const current = units.get(descriptor.key);
       return !current || current.failed || current.stamp !== descriptor.stamp || current.schema !== USAGE_SCHEMA ||
-        (leaderboard && descriptor.mtimeMs >= rankStart && current.leaderboardFrom !== rankDay);
+        (leaderboard && missingHistory(descriptor, current));
     };
     const waitingRetry = descriptor => {
       const current = units.get(descriptor.key);
@@ -280,7 +286,7 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
         const result = await readDays(descriptor);
         const { days, leaderboardDays, leaderboardFrom } = leaderboard ? result : { days: result };
         unit = { stamp: descriptor.stamp, days, readAt: now(), schema: USAGE_SCHEMA };
-        if (leaderboard) Object.assign(unit, { leaderboardDays, leaderboardFrom });
+        if (leaderboard) Object.assign(unit, { leaderboardDays, leaderboardFrom, leaderboardThrough: rankDay });
       } catch (error) {
         signal?.throwIfAborted();
         // Keep the last successful counts and retry even when a transient failure leaves the file unchanged.
@@ -305,8 +311,9 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     };
     updatedAt = now();
     if (leaderboard) {
-      const pendingToday = descriptors.some(item => item.mtimeMs >= rankStart && units.get(item.key)?.leaderboardFrom !== rankDay);
+      const pendingToday = descriptors.some(item => missingToday(item, units.get(item.key)));
       readyLeaderboardDay = pendingToday ? '' : rankDay;
+      readyHistoryDay = descriptors.some(item => missingHistory(item, units.get(item.key))) ? '' : rankDay;
     }
     return { pending: progress.total - progress.done };
   }
@@ -323,5 +330,17 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     return { day, tokens, updatedAt, ready: readyLeaderboardDay === day };
   }
 
-  return { refresh, summary, ready, leaderboardUsage };
+  function leaderboardHistory() {
+    const nowMs = now(), day = leaderboardDay(nowMs);
+    if (readyHistoryDay !== day) return { day, ready: false };
+    const from = leaderboardDay(nowMs - (rankDays - 1) * 86_400_000), totals = new Map();
+    for (const unit of units.values()) {
+      for (const [key, tokens] of Object.entries(unit.leaderboardDays ?? {})) {
+        if (key >= from && key <= day && tokens > 0) totals.set(key, (totals.get(key) ?? 0) + tokens);
+      }
+    }
+    return { day, ready: true, scores: [...totals.keys()].sort().map(day => ({ day, tokens: totals.get(day) })) };
+  }
+
+  return { refresh, summary, ready, leaderboardUsage, leaderboardHistory };
 }
