@@ -1,6 +1,6 @@
 ---
 name: docs-update
-description: 在 TPS Plugion 的用户可见功能、界面、工具支持或安装方式变更并验证后，同步维护中英文 README 与 Orca 官方插件目录的介绍和配图。
+description: 在 TPS Plugin 的用户可见功能、界面、工具支持或安装方式变更并验证后，同步维护中英文 README 与 Orca 官方插件目录的介绍和配图。
 ---
 
 # 同步项目说明

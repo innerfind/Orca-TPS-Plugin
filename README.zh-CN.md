@@ -1,4 +1,4 @@
-# TPS Plugion
+# TPS Plugin
 
 **[English](./README.md)** · **简体中文** · **[Orca 插件目录](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)**
 
@@ -8,7 +8,7 @@
 
 ## 1. 项目描述
 
-TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成速度。你可以查看当前会话的请求、回顾个人用量，也可以用 GitHub 账号参加天梯榜。
+TPS Plugin 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成速度。你可以查看当前会话的请求、回顾个人用量，也可以用 GitHub 账号参加天梯榜。
 
 插件支持本地和 SSH 工作区，可切换 10 种界面语言，并记住上次选择。会话日志在原处读取，天梯榜接收的是用量汇总。
 
@@ -18,7 +18,7 @@ TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成�
 
 <p align="center">
   <a href="./assets/readme/zh-CN/overview.png" title="查看原图">
-    <img src="./assets/readme/zh-CN/overview.webp" width="640" alt="TPS Plugion 总览图，展示三个中文分页">
+    <img src="./assets/readme/zh-CN/overview.webp" width="640" alt="TPS Plugin 总览图，展示三个中文分页">
   </a>
 </p>
 
@@ -43,6 +43,7 @@ TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成�
 - 查看今日、近 7 天和近 30 天的用量与请求数。
 - 按工具和模型查看用量，比较各模型的平均生成速度。用量以 MB 显示，包含新输入、输出和缓存读写。
 - 用年度热力图查看过去一年每天的用量。
+- 用量历史会缓存在本地，重启 Orca 后可恢复。
 
 <p align="center">
   <a href="./assets/readme/zh-CN/personal-stats.png" title="查看原图">
