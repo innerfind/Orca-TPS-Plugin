@@ -62,14 +62,22 @@ test('window totals separate today, week and month; tokens are new input plus ou
   assert.equal(windows.month.rows.find(row => row.model === '').tokens, 2, 'missing model stays a separate empty id');
 });
 
-function fakeStorage() {
-  const map = new Map();
+function fakeStorage({ keyLimit = Infinity, valueLimit = Infinity } = {}) {
+  const map = new Map(), writes = [], removals = [];
   return {
-    map,
+    map, writes, removals,
     async keys() { return [...map.keys()]; },
     async get(key) { return map.has(key) ? structuredClone(map.get(key)) : null; },
-    async set(key, value) { map.set(key, structuredClone(value)); },
-    async delete(key) { map.delete(key); }
+    async set(key, value) {
+      if (!map.has(key) && map.size >= keyLimit) throw new Error('storage key limit');
+      if (Buffer.byteLength(JSON.stringify(value)) > valueLimit) throw new Error('storage value limit');
+      writes.push(key);
+      map.set(key, structuredClone(value));
+    },
+    async delete(key) {
+      removals.push(key);
+      map.delete(key);
+    }
   };
 }
 
@@ -96,18 +104,113 @@ test('index re-reads only changed units, respects the byte budget, and replaces 
   assert.equal(index.summary().windows.today.tokens, 150);
   assert.deepEqual(reads, ['a', 'b']);
 
+  storage.writes.length = 0;
   await index.refresh();
   assert.deepEqual(reads, ['a', 'b'], 'unchanged stamps are not read again');
+  assert.deepEqual(storage.writes, [], 'unchanged groups are not written again');
 
   units = [unit('a', 's2', 300, { mtimeMs: 4 }), unit('b', 's1', 50, { mtimeMs: 2 })];
   await index.refresh();
   assert.equal(index.summary().windows.today.tokens, 350, 'changed unit replaces its own totals');
   assert.deepEqual(reads, ['a', 'b', 'a']);
+  assert.equal(storage.writes.length, 1, 'only the changed group is written');
 
   units = [unit('a', 's2', 300, { mtimeMs: 4 })];
   await index.refresh();
   assert.equal(index.summary().windows.today.tokens, 300, 'units that left the window are dropped');
-  assert.equal(storage.map.has(`${UNIT_KEY_PREFIX}b`), false);
+  const restarted = createUsageIndex({ storage, discover: async () => units, now: () => now });
+  await restarted.ready();
+  assert.equal(restarted.summary().windows.today.tokens, 300, 'removed units stay removed after restart');
+});
+
+test('a saturated store migrates all its cached sessions and has space for more than 1024 sessions', async () => {
+  const now = at(2026, 11, 8, 9), today = localDayKey(now);
+  const storage = fakeStorage({ keyLimit: 1024, valueLimit: 256 * 1024 });
+  await storage.set('locale', 'zh-CN');
+  const days = { [today]: { codex: { m: [1, 10, 0, 0, 0] } } };
+  let reads = 0;
+  const units = Array.from({ length: 1500 }, (_, i) => ({
+    key: `session-${i}`, stamp: 's1', bytes: 10, mtimeMs: i,
+    async read() { reads++; return days; }
+  }));
+  for (const unit of units.slice(0, 1023)) {
+    await storage.set(UNIT_KEY_PREFIX + unit.key, { stamp: unit.stamp, schema: USAGE_SCHEMA, days });
+  }
+  assert.equal(storage.map.size, 1024);
+  const options = { storage, discover: async () => units, now: () => now, maxUnits: BACKFILL_UNITS };
+  const index = createUsageIndex(options);
+  await index.ready();
+  assert.equal(index.summary().windows.today.requests, 1023, 'old totals are available before migration');
+  storage.writes.length = 0;
+  await index.refresh();
+  assert.ok(storage.writes.length + storage.removals.length <= BACKFILL_UNITS, 'the first migration pass limits store mutations');
+  for (let pass = 0; index.hasBackfill(); pass++) {
+    assert.ok(pass < 1024, 'background migration and new reads complete');
+    await index.refresh();
+  }
+  assert.ok(storage.map.size <= 65);
+  assert.equal(reads, 477, 'cached sessions were migrated without scanning their logs again');
+  const restarted = createUsageIndex(options);
+  await restarted.ready();
+  assert.equal(restarted.summary().windows.today.requests, 1500);
+  assert.equal(await storage.get('locale'), 'zh-CN');
+});
+
+test('a compressed usage group fits the per-value limit even when its JSON is larger', async () => {
+  const now = at(2026, 11, 8, 9);
+  const storage = fakeStorage({ valueLimit: 256 * 1024 });
+  const models = Object.fromEntries(Array.from({ length: 50 }, (_, i) => [`claude-model-${i}`, [1, 20, 0, 0, 0]]));
+  const days = Object.fromEntries(Array.from({ length: 120 }, (_, i) => [dayKeyAgo(now, i), { claude: models }]));
+  const units = ['old-8', 'old-20'].map(key => ({ key, stamp: 's1', bytes: 10, mtimeMs: now, read: async () => days }));
+  assert.ok(Buffer.byteLength(JSON.stringify([days, days])) > 256 * 1024);
+
+  const options = { storage, discover: async () => units, now: () => now };
+  await createUsageIndex(options).refresh();
+  assert.equal(storage.map.size, 1);
+  const restarted = createUsageIndex(options);
+  await restarted.ready();
+  assert.equal(restarted.summary().windows.today.requests, 100);
+  assert.equal(restarted.summary().daily.length, 120);
+});
+
+test('a full store keeps legacy stats across a failed write and resumes after interrupted cleanup', async () => {
+  const now = at(2026, 11, 8, 9), today = localDayKey(now);
+  const storage = fakeStorage({ keyLimit: 3 });
+  // These two legacy units hash to the same group.
+  const keys = ['old-8', 'old-20'];
+  const counters = { [today]: { codex: { m: [1, 10, 0, 0, 0] } } };
+  for (const key of keys) await storage.set(UNIT_KEY_PREFIX + key, { stamp: 's1', schema: USAGE_SCHEMA, days: counters });
+  await storage.set('locale', 'zh-CN');
+  let reads = 0;
+  const units = keys.map(key => ({
+    key, stamp: 's1', bytes: 10, mtimeMs: now,
+    async read() { reads++; return counters; }
+  }));
+  const options = { storage, discover: async () => units, now: () => now };
+  const snapshot = structuredClone(storage.map);
+  const save = storage.set;
+  storage.set = async () => { throw new Error('simulated write failure'); };
+  await createUsageIndex(options).refresh();
+  assert.deepEqual(storage.map, snapshot, 'a failed group write leaves every old value available');
+
+  storage.set = save;
+  const remove = storage.delete;
+  storage.delete = async () => { throw new Error('simulated interruption before cleanup'); };
+  const second = createUsageIndex(options);
+  await second.refresh();
+  assert.equal(storage.map.size, 3, 'the group was written into an existing slot');
+  assert.equal([...storage.map.values()].filter(value => value?.stamp === 's1').length, 1, 'a redundant legacy copy remains');
+
+  storage.delete = remove;
+  storage.writes.length = 0;
+  const restarted = createUsageIndex(options);
+  await restarted.ready();
+  assert.equal(restarted.summary().windows.today.tokens, 20, 'group and legacy copies do not count twice');
+  await restarted.refresh();
+  assert.equal(storage.map.size, 2, 'cleanup frees a slot for other settings');
+  assert.equal(reads, 0, 'migration does not require rereading original logs');
+  assert.deepEqual(storage.writes, [], 'resuming cleanup needs no duplicate group write');
+  assert.equal(await storage.get('locale'), 'zh-CN');
 });
 
 test('index survives restart from storage without immediately retrying failed units', async () => {
@@ -476,8 +579,7 @@ test('index units stored before speed counters keep their totals, are re-read on
   assert.deepEqual(reads, ['old']);
   assert.equal(index.summary().windows.today.tokens, 150);
   assert.equal(index.summary().windows.today.speeds[0].tokensPerSecond, 120);
-  assert.equal(storage.map.get(`${UNIT_KEY_PREFIX}old`).schema, USAGE_SCHEMA);
-
-  await index.refresh();
+  const restarted = createUsageIndex({ storage, discover: async () => [unit], now: () => now });
+  await restarted.refresh();
   assert.deepEqual(reads, ['old'], 'a current-schema unit is not read again');
 });
