@@ -1,37 +1,40 @@
-# Orca Tokens & TPS Statistics Plugin
+# TPS Plugion
 
-**Orca 软件 Tokens 统计插件** · **English** | **[简体中文文档 (Chinese Documentation)](./README.zh-CN.md)**
+**English** | **[简体中文](./README.zh-CN.md)** · **[Orca plugin directory](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Orca Engine](https://img.shields.io/badge/Orca-%3E%3D1.4.251-blue.svg)](https://github.com/stablyai/orca)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933.svg)](https://nodejs.org/)
 [![CI](https://github.com/jecyxyf/Orca-TPS-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/jecyxyf/Orca-TPS-Plugin/actions/workflows/ci.yml)
 
-![Orca Tokens & Per-Request TPS Stats Cover](./assets/cover.png)
+![TPS Plugion showing Current Data, Personal Stats, and Leaderboard](./assets/1.6.1/cover.png)
 
-Real-time **token usage**, **per-request output speed (TPS)**, **time-to-first-token (TTFT)**, and **prompt-cache hit rate** statistics plugin for **Orca IDE (`>= 1.4.251`, tested & optimized for `1.4.255+`)**. Powered by a zero-dependency calculation engine 100% aligned with [CC Switch](https://github.com/farion1231/cc-switch), automatically excluding local tool execution and permission wait times across **Linux** and **Windows**.
+Track live request speed, review personal token usage, and compete on a shared leaderboard from the Orca sidebar. TPS Plugion supports Orca IDE 1.4.251 and later on Windows and Linux.
 
-> 📖 **中文说明 / Chinese Guide**: 请查看 **[简体中文完整文档 (README.zh-CN.md)](./README.zh-CN.md)**。
+## Three views
 
----
+| View | What you can see |
+| --- | --- |
+| **Current data** | The latest 100 requests in the active channel, with the model, output speed (TPS), time to first token (TTFT), output in KB, and cache hit rate. The status bar shows the latest speed and cache hit rate. |
+| **Personal stats** | Today, rolling 7-day and 30-day totals, model usage and average speed, and a year of activity in a heatmap. Usage in MB includes new input, output, cache reads, and cache writes. |
+| **Leaderboard** | Today, 7-day, and 30-day rankings with gold, silver, and bronze medals. Sign in with GitHub to upload manually or set automatic uploads with an interval of at least 10 seconds. Each installation reports its own totals, and the leaderboard combines them by account. |
 
-## Key Features
+TPS Plugion reads sessions from Claude Code (including subagents), Codex CLI, OpenCode v1 and v2, Pi Agent, and Antigravity CLI. It can also match requests with a local [CC Switch](https://github.com/farion1231/cc-switch) proxy database for more precise timing.
 
-- **Live Status Bar Tracking**: Shows output speed and cache hit rate for the latest API request in the active Orca project channel. Click to refresh immediately.
-- **Per-Request Sidebar Cards**: View the latest 100 requests across terminal sessions in the active channel, including model, completion time, TTFT, output tokens, request duration, TPS, and cache hit rate.
-- **Remote Project Channels**: Uses the existing Orca connection and a plugin-owned background terminal to collect statistics where the project runs. The remote host needs Node.js 22.13 or newer with SQLite support. The plugin asks for workspace and terminal access. Orca host API 1.7 or newer is required for remote collection.
-- **Tool Execution Time Excluded**: Measures individual API call durations instead of whole-turn wall-clock time, so local builds, test suites, shell commands, and approval dialogs never distort model generation speed.
-- **Multi-Agent & Subagent Support**: Natively parses local terminal sessions from **Claude Code** (including `<SESSION_ID>/subagents` and workflow subagents), **Codex CLI**, **OpenCode (v1 & v2)**, **Pi Agent**, and **Antigravity CLI**, with optional read-only deduplication and exact-TTFT upgrades from `~/.cc-switch/cc-switch.db`.
-- **Usage Totals & Heatmap**: A panel at the top shows today, the last 7 days and the last 30 days, plus a GitHub-style heatmap of the last year. Totals cover Claude Code, Codex, OpenCode, Pi and Antigravity CLI: total tokens (new input, output, cache writes and cache reads, matching CC Switch's real total), cache hit rate, request counts, and a per-agent and per-model breakdown. A **model average speed** ranking (mean tokens/s per model, from local session logs) sits in the same group. Counted locally in the background; only counts are stored, never message text.
-- **Read-Only Session Data**: The parser reads agent transcripts and databases without modifying them. Remote projects send statistics back over the Orca connection, and conversation text stays with the parser.
-
----
+Remote project channels collect statistics on the remote host over the workspace's SSH connection. The remote host needs Node.js 22.13 or newer with SQLite support. Session files are read-only, conversation text stays where it is parsed, and leaderboard uploads contain usage totals.
 
 ## Screenshots
 
-| Dark Theme | Light Theme |
+Screenshots use sample data.
+
+| Dark theme | Light theme |
 | :---: | :---: |
-| ![Dark Screenshot](./assets/screenshot-dark.png) | ![Light Screenshot](./assets/screenshot-light.png) |
+| ![Live request speed, time to first token, and cache hit rate](./assets/1.6.1/screenshot-dark.png) | ![Request details with proxy and estimated speed labels](./assets/1.6.1/screenshot-light.png) |
+| **Current data** | **Request details** |
+| ![Daily totals and usage by model](./assets/1.6.1/screenshot-usage.png) | ![Average speed by model and a yearly activity heatmap](./assets/1.6.1/screenshot-activity.png) |
+| **Personal stats** | **Usage heatmap** |
+| ![GitHub account, gold, silver, and bronze medals, and upload controls](./assets/1.6.1/screenshot-leaderboard.png) | ![Seven-day leaderboard with the top three medals](./assets/1.6.1/screenshot-period-ranking.png) |
+| **Leaderboard and uploads** | **Rolling rankings** |
 
 ---
 
@@ -122,7 +125,7 @@ The plugin reads the exact transcript/database path recorded by Orca for the foc
 
 ```text
 Orca-TPS-Plugin/
-├── assets/                   # Plugin icon, 16:10 cover banner, and dark/light screenshots
+├── assets/                   # Plugin icon, 16:10 cover, and six screenshots
 ├── src/
 │   ├── worker.mjs            # Orca trusted-worker activation entry
 │   ├── active-conversation.mjs # Read-only Orca active workspace/tab/pane resolver
@@ -131,7 +134,7 @@ Orca-TPS-Plugin/
 │   ├── data-paths.mjs        # Cross-platform Linux / Windows / macOS path resolution
 │   ├── parsers.mjs           # CC Switch-aligned per-request parser & speed/cache formulas
 │   └── panel.html            # Responsive sidebar HTML panel with light/dark theming
-├── tests/                    # 51 unit and SQLite integration tests
+├── tests/                    # Unit and integration tests
 ├── .github/workflows/ci.yml  # Automated CI matrix for Ubuntu and Windows
 ├── install-linux.sh          # Linux validation & loader script
 ├── install-windows.ps1       # Windows PowerShell validation & loader script
@@ -148,7 +151,7 @@ Orca-TPS-Plugin/
 ## Development & Testing
 
 ```sh
-# Run all 51 unit & SQLite integration tests (requires Node.js >= 22.13)
+# Run the tests (requires Node.js >= 22.13)
 npm test
 
 # Validate manifest, catalog, and tests via Orca CLI

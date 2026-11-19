@@ -1,35 +1,40 @@
-# Orca 软件 Tokens 统计插件
+# TPS Plugion
 
-**[English Documentation (README.md)](./README.md)** | **简体中文**
+**[English](./README.md)** | **简体中文** · **[Orca 插件目录](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Orca Engine](https://img.shields.io/badge/Orca-%3E%3D1.4.251-blue.svg)](https://github.com/stablyai/orca)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D22.13-339933.svg)](https://nodejs.org/)
 [![CI](https://github.com/jecyxyf/Orca-TPS-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/jecyxyf/Orca-TPS-Plugin/actions/workflows/ci.yml)
 
-![Orca 软件 Tokens 统计插件封面](./assets/cover.png)
+![TPS Plugion 封面，展示当前数据、个人统计和天梯榜](./assets/1.6.1/cover.png)
 
-适用于 **Orca IDE 1.4.251+（实测已深度适配 Orca 1.4.255+）** 的实时 Tokens 用量、单次请求输出速度（TPS）、首字延迟（TTFT）与缓存命中率统计插件。采用与 [CC Switch](https://github.com/farion1231/cc-switch) 完全一致的**单次 API 请求级**计算引擎，自动剔除本地工具执行与权限等待耗时，零外部依赖，原生支持 **Linux** 与 **Windows**。
+在 Orca 侧栏查看实时请求速度、个人 Token 用量和多人天梯榜。支持 Windows 和 Linux 上的 Orca IDE 1.4.251 及以上版本。
 
----
+## 三个分栏
 
-## 核心特性
+| 分栏 | 可以看什么 |
+| --- | --- |
+| **当前数据** | 当前频道最近 100 次请求的模型、输出速度（TPS）、首字延迟、输出量（KB）和缓存命中率。底部状态栏显示最新一次请求的速度和缓存命中率。 |
+| **个人统计** | 今日、近 7 天和近 30 天用量，按模型查看消耗与平均速度，并用热力图回顾一年用量。总量以 MB 显示，包含新输入、输出和缓存读写。 |
+| **天梯榜** | 今日、近 7 天和近 30 天排名，前三名各有金、银、铜奖牌。用 GitHub 登录后可以手动上传，也可开启自动上传，最快每 10 秒一次。每个安装分别上报，再按账号合计多台设备的用量。 |
 
-- **底部状态栏实时跟随**：显示当前项目频道最新一次 API 请求的输出速度和缓存命中率，点击即可刷新。
-- **侧栏请求级明细卡片**：在「对话 TPS」查看当前频道各终端最近 100 次请求的模型、完成时间、首字延迟、输出 Token、耗时、TPS 和缓存命中率。
-- **远程项目频道**：复用 Orca 的连接，由插件专用后台终端在项目所在机器采集统计。首次使用时需授权工作区和终端访问。远端需要支持 SQLite 的 Node.js 22.13 或更新版本，Orca 宿主接口需要 1.7 或更新版本。
-- **严格剔除工具运行耗时**：不再用整轮挂钟时间充当分母，避免本地编译、测试脚本执行或权限确认弹窗拉低模型真实生成速度。
-- **完整支持四大 CLI 与子代理**：原生解析本机终端中的 **Claude Code**（含 `<SESSION_ID>/subagents` 与 `workflows` 子代理）、**Codex CLI**、**OpenCode（v1 / v2）**、**Pi Agent** 与 **Antigravity CLI**，并支持只读融合 `~/.cc-switch/cc-switch.db` 本地路由代理的精确首字记录。
-- **用量战况与热力图**：面板顶部提供「当日战况 / 近一周战况 / 近一月战况」，并附近一年的用量热力图（鼠标悬停查看每日数值）。统计范围包括 Claude Code、Codex、OpenCode、Pi 与 Antigravity CLI，汇总 token 总量（新输入、输出、缓存写入与缓存读取，与 CC Switch 的真实总量一致）、缓存命中率、请求数，并按 agent 与模型拆分。同一分组内还有「模型均速」排名（按模型的单次请求平均输出速度 tokens/s，基于本地会话日志，从高到低）。后台在本地增量统计，只保存计数，不保存对话内容。
-- **只读会话数据**：解析器只读会话日志和数据库。远程项目通过 Orca 连接回传统计结果，提示词和回复正文留在解析端。
+支持 Claude Code（含子代理）、Codex CLI、OpenCode v1 / v2、Pi Agent 和 Antigravity CLI。接入 [CC Switch](https://github.com/farion1231/cc-switch) 本地代理库后，可匹配更精确的请求耗时和首字延迟。
 
----
+远程项目通过工作区的 SSH 连接在远端采集，远端需安装支持 SQLite 的 Node.js 22.13 或更新版本。会话文件只读，提示词和回复正文留在解析端，天梯榜上传用量汇总。
 
 ## 界面预览
 
-| 深色主题（Dark） | 浅色主题（Light） |
+截图均使用示例数据。
+
+| 深色主题 | 浅色主题 |
 | :---: | :---: |
-| ![Dark Screenshot](./assets/screenshot-dark.png) | ![Light Screenshot](./assets/screenshot-light.png) |
+| ![单次请求的速度、首字延迟和缓存命中率](./assets/1.6.1/screenshot-dark.png) | ![请求明细中的代理和估算速度标记](./assets/1.6.1/screenshot-light.png) |
+| **当前数据** | **请求明细** |
+| ![当日总用量和各模型用量](./assets/1.6.1/screenshot-usage.png) | ![模型平均速度与全年用量热力图](./assets/1.6.1/screenshot-activity.png) |
+| **个人统计** | **用量热力图** |
+| ![GitHub 账号、三种奖牌和自动上传设置](./assets/1.6.1/screenshot-leaderboard.png) | ![近 7 天累计排名和前三名的奖牌](./assets/1.6.1/screenshot-period-ranking.png) |
+| **天梯榜和上传** | **累计排名** |
 
 ---
 

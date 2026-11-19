@@ -3,8 +3,8 @@
   "manifestVersion": 2,
   "id": "tps-stats",
   "name": "TPS Plugion",
-  "version": "1.6.0",
-  "description": "Real-time token usage, per-request TPS, TTFT, and prompt-cache hit rate statistics plugin for Orca IDE (Claude Code, Codex, OpenCode, Pi), powered by CC Switch metrics.",
+  "version": "1.6.1",
+  "description": "Live request speed, personal token usage, and GitHub leaderboards with multi-device totals for Orca IDE.",
   "author": {
     "name": "jecyxyf",
     "url": "https://github.com/jecyxyf"
@@ -14,20 +14,44 @@
   "homepage": "https://github.com/jecyxyf/Orca-TPS-Plugin",
   "icon": "assets/icon.png",
   "cover": {
-    "path": "assets/cover.png",
-    "alt": "Orca Tokens & Per-Request TPS Stats cover showing live status bar speed and per-request sidebar cards with TTFT and cache hit rates"
+    "path": "assets/1.6.1/cover.png",
+    "alt": "TPS Plugion showing the Current Data, Personal Stats, and Leaderboard tabs"
   },
   "screenshots": [
     {
-      "path": "assets/screenshot-dark.png",
-      "alt": "Orca dark workspace with the TPS & Token Statistics sidebar panel showing per-request speed, TTFT, subagent badges, and status bar",
-      "caption": "Dark theme: live per-request TPS, TTFT, output tokens, and prompt-cache hit rate",
+      "path": "assets/1.6.1/screenshot-dark.png",
+      "alt": "Dark Current Data tab with request speed, first-token time, output, and cache hit rate",
+      "caption": "当前数据 · 逐条查看实时 TPS、首字延迟和缓存命中率",
       "theme": "dark"
     },
     {
-      "path": "assets/screenshot-light.png",
-      "alt": "Orca light workspace with the TPS & Token Statistics sidebar panel showing per-request speed, TTFT, subagent badges, and status bar",
-      "caption": "Light theme: automatic Orca theme adaptation and compact responsive layout",
+      "path": "assets/1.6.1/screenshot-light.png",
+      "alt": "Light request cards with labels for proxy timing and estimates",
+      "caption": "请求明细 · 浅色主题下区分代理记录和日志估算",
+      "theme": "light"
+    },
+    {
+      "path": "assets/1.6.1/screenshot-usage.png",
+      "alt": "Dark Personal Stats tab with daily totals, request count, and usage by model",
+      "caption": "个人统计 · 今日、近 7 天和近 30 天的用量与模型明细",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/1.6.1/screenshot-activity.png",
+      "alt": "Light model speed chart and yearly usage heatmap",
+      "caption": "用量热力图 · 回顾全年用量，比较模型平均速度",
+      "theme": "light"
+    },
+    {
+      "path": "assets/1.6.1/screenshot-leaderboard.png",
+      "alt": "Dark Leaderboard tab showing three medals and automatic upload controls",
+      "caption": "天梯榜 · 个人排名、奖牌和自动上传设置",
+      "theme": "dark"
+    },
+    {
+      "path": "assets/1.6.1/screenshot-period-ranking.png",
+      "alt": "Light seven-day rankings with gold, silver, and bronze medals",
+      "caption": "累计排名 · 切换今日、近 7 天和近 30 天榜单",
       "theme": "light"
     }
   ],
