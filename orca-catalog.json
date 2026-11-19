@@ -11,11 +11,98 @@
         "url": "https://github.com/jecyxyf/Orca-TPS-Plugin.git",
         "ref": "main"
       },
-      "description": "Real-time token usage, per-request TPS, TTFT, and prompt-cache hit rate statistics plugin for Orca IDE (Claude Code, Codex, OpenCode, Pi), powered by CC Switch metrics.",
+      "description": "Live request speed, personal token usage, and GitHub leaderboards with multi-device totals for Orca IDE.",
       "categories": [
         "productivity"
       ],
       "releases": [
+        {
+          "version": "1.6.1",
+          "commit": "03eeddb3b0055825436f35ea3e425b1766c55725",
+          "contentHash": "1639efa02dc763cfbc81a60c233840aaf9a37d3603dc25cdaa2f89a2297ceef9",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.251",
+          "name": "TPS Plugion",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "对话 TPS"
+            },
+            {
+              "kind": "commands",
+              "name": "刷新对话 TPS"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "🚀 — tokens/s · 🍪 命中 —"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read",
+            "secrets:own"
+          ],
+          "images": {
+            "icon": {
+              "path": "assets/icon.png",
+              "alt": "TPS Plugion",
+              "sha256": "8e1501049b18c550b66ffcc02843db683d5752d3816cd719893a737f34e27a15",
+              "width": 256,
+              "height": 256
+            },
+            "cover": {
+              "path": "assets/1.6.1/cover.png",
+              "alt": "TPS Plugion showing the Current Data, Personal Stats, and Leaderboard tabs",
+              "sha256": "11e06e23bd2da5d30cfc8118e886e48f6048f76c68f30fe0642632353c927c31",
+              "width": 1600,
+              "height": 1000
+            },
+            "screenshots": [
+              {
+                "path": "assets/1.6.1/screenshot-dark.png",
+                "alt": "Dark Current Data tab with request speed, first-token time, output, and cache hit rate",
+                "sha256": "3be65fc91c2c4af0de540533027ef66ed25490c3e2eb70c78364fe2133f26fbf",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.1/screenshot-light.png",
+                "alt": "Light request cards with labels for proxy timing and estimates",
+                "sha256": "18413cc66c69fc767be6819e7621907913a88535e8ec8b820940796f57f94a88",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.1/screenshot-usage.png",
+                "alt": "Dark Personal Stats tab with daily totals, request count, and usage by model",
+                "sha256": "89f60c3ad78b2dcc67b61a16db63d4fc16537db650c55a989569898a5097dfc8",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.1/screenshot-activity.png",
+                "alt": "Light model speed chart and yearly usage heatmap",
+                "sha256": "b52be2495173e2b849f78d518f03508254577deaad2ecc2d7210c0ecea96a687",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.1/screenshot-leaderboard.png",
+                "alt": "Dark Leaderboard tab showing three medals and automatic upload controls",
+                "sha256": "23731d0e2875ae10378302e173fe84c6f742aaa3ab470099762b199ca1b764f0",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.1/screenshot-period-ranking.png",
+                "alt": "Light seven-day rankings with gold, silver, and bronze medals",
+                "sha256": "7e49fe80be413e104436f592a590152669e23b4bb4e507b155a0e88e61436e9e",
+                "width": 1600,
+                "height": 1000
+              }
+            ]
+          }
+        },
         {
           "version": "1.6.0",
           "commit": "eb987f5a4c303ae2e52717f7841194e8d7b3e156",
