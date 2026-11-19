@@ -22,6 +22,7 @@ import {
   recentRecords
 } from './parsers.mjs';
 import { HISTORY_DAYS, accumulateRecords, dayKeyAgo, leaderboardDayStart } from './usage-summary.mjs';
+import { hermesSources, readHermesRecords, readHermesSessions } from './hermes.mjs';
 
 const MAX_FILES = 1500, MAX_DIRECTORIES = 500, MAX_DEPTH = 8, MAX_SUBAGENT_FILES = 200;
 const MAX_FILE_BYTES = 16 * 1024 * 1024, MAX_SCAN_BYTES = 64 * 1024 * 1024, MAX_HEADER_BYTES = 262_144;
@@ -656,7 +657,7 @@ function preferBetterSession(map, session) {
 
 async function readSingleTargetSession(target, options = {}) {
   const warnings = new Set(), budget = { remaining: MAX_SCAN_BYTES };
-  if (!target || !['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity'].includes(target.provider)
+  if (!target || !['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity', 'hermes'].includes(target.provider)
       || typeof target.sessionId !== 'string' || !target.sessionId || target.sessionId.length > 256) {
     return { session: null, warnings: ['当前会话尚未识别，等待会话记录。'] };
   }
@@ -699,6 +700,11 @@ async function readSingleTargetSession(target, options = {}) {
     };
     return { session: enriched, warnings: [...warnings] };
   };
+  if (target.provider === 'hermes') {
+    const roots = await configuredRoots(options.roots, options.includeDefaults !== false);
+    const sessions = await readHermesSessions(roots.hermes, { sessionIds: [target.sessionId], warnings });
+    return finish(bestSession(sessions));
+  }
   if (explicitPath !== undefined && explicitPath !== null) {
     const candidate = await candidateFor(target.provider, explicitPath);
     return finish(candidate ? await read(candidate) : null);
@@ -766,7 +772,12 @@ async function readChannelSessions(target, options = {}) {
   const warnings = new Set();
   const bySessionId = new Map();
 
+  const hermesIds = [];
   for (const entry of explicitSessions) {
+    if (entry?.provider === 'hermes') {
+      if (safeSegment(entry.sessionId)) hermesIds.push(entry.sessionId);
+      continue;
+    }
     const res = await readSingleTargetSession(entry, {
       ...options,
       skipProxyMerge: true
@@ -775,8 +786,16 @@ async function readChannelSessions(target, options = {}) {
     if (res.session) preferBetterSession(bySessionId, res.session);
   }
 
+  const roots = wantedCwd || hermesIds.length
+    ? await configuredRoots(options.roots, options.includeDefaults !== false) : null;
+  if (roots) {
+    const sessions = await readHermesSessions(roots.hermes, {
+      sessionIds: hermesIds, worktree: wantedCwd, comparePath: value => normalizeComparePath(value, platform), warnings
+    });
+    for (const session of sessions) preferBetterSession(bySessionId, session);
+  }
+
   if (wantedCwd) {
-    const roots = await configuredRoots(options.roots, options.includeDefaults !== false);
     const budget = { remaining: MAX_SCAN_BYTES };
     const maxAgeMs = options.fresh ? 0 : 4_000;
 
@@ -896,7 +915,7 @@ export function createLiveSessionReader() {
         if (!filename || kind === 'rename') {
           discoveryCache.clear();
           version++;
-        } else if (/\.(?:jsonl|db|sqlite|sqlite3)(?:-wal)?$/i.test(filename)) {
+        } else if (/\.(?:jsonl|db|sqlite|sqlite3)(?:-wal)?$/i.test(filename) || /(?:^|[\\/])agent\.log(?:\.\d+)?$/i.test(filename)) {
           version++;
         }
       });
@@ -1194,6 +1213,20 @@ export async function discoverUsageUnits(cutoffMs, options = {}) {
   }
   for (const root of (roots.antigravity ?? []).slice(0, 10)) {
     units.push(...await antigravityUsageUnits(root, cutoffMs, rankWindow));
+  }
+  for (const source of await hermesSources(roots.hermes, cutoffMs)) {
+    units.push({
+      key: identity(`hermes|${source.root}`),
+      stamp: source.stamp,
+      bytes: source.bytes,
+      mtimeMs: source.mtimeMs,
+      async read() {
+        const days = {}, rank = rankedUsage(rankWindow);
+        const records = await readHermesRecords(source);
+        accumulateRecords(days, 'hermes', records, { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1), leaderboardDays: rank });
+        return usageResult(days, rank);
+      }
+    });
   }
   return units;
 }

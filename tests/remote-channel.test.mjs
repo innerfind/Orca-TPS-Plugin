@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createRemoteChannelReader, createRemoteUsageReader } from '../src/remote-channel.mjs';
-import { collectRemoteChannel, collectorCommand } from '../src/remote-collector.mjs';
+import { collectRemoteChannel, collectorCommand, remoteRecord } from '../src/remote-collector.mjs';
 import { createUsageIndex, localDayKey } from '../src/usage-summary.mjs';
 
 test('one SSH stream merges project sessions and receives new records without sending another request', async t => {
@@ -32,7 +32,12 @@ test('one SSH stream merges project sessions and receives new records without se
   await writeSession('remote-two', project, 330, '2026-01-01T00:00:03Z');
   await writeSession('other-project', otherProject, 999, '2026-01-01T00:00:04Z');
 
-  const target = { key: 'primary', executionHostId: 'runtime:primary', worktreeId: 'worktree', worktreePath: project, sessions: [] };
+  const hermesHome = path.join(home, '.hermes'), hermesLogs = path.join(hermesHome, 'logs');
+  await mkdir(hermesLogs, { recursive: true });
+  await writeFile(path.join(hermesLogs, 'agent.log'),
+    '2026-01-01 00:00:03,500 INFO [hermes-remote] agent.conversation_loop: API call #1: model=vendor/flash-model:free provider=example in=122 out=60 total=182 latency=2.0s\n');
+  const target = { key: 'primary', executionHostId: 'runtime:primary', worktreeId: 'worktree', worktreePath: project,
+    sessions: [{ provider: 'hermes', sessionId: 'hermes-remote' }] };
   let child, launches = 0, requests = 0;
   const remote = createRemoteChannelReader({
     grantedCapabilities: ['workspace:read'],
@@ -47,7 +52,8 @@ test('one SSH stream merges project sessions and receives new records without se
       launches++;
       const command = collectorCommand(token).split('"')[1];
       child = spawn(process.execPath, ['--input-type=commonjs', '-e', command], {
-        cwd: project, env: { ...process.env, HOME: home, USERPROFILE: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome },
+        cwd: project, env: { ...process.env, HOME: home, USERPROFILE: home, LOCALAPPDATA: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome,
+          HERMES_HOME: hermesHome, TZ: 'UTC' },
         stdio: ['pipe', 'pipe', 'ignore']
       });
       const write = child.stdin.write.bind(child.stdin);
@@ -62,9 +68,12 @@ test('one SSH stream merges project sessions and receives new records without se
     remote.setTarget(target);
     const first = await remote.read(target);
     assert.deepEqual(first.warnings, []);
-    assert.deepEqual(first.session.records.map(record => record.outputTokens), [330, 200]);
-    assert.deepEqual(first.session.records.map(record => record.tokensPerSecond), [110, 100]);
-    assert.doesNotMatch(JSON.stringify(first), /PRIVATE_CHAT_CONTENT|remote-one|remote-two/);
+    assert.deepEqual(first.session.records.map(record => record.outputTokens), [60, 330, 200]);
+    assert.deepEqual(first.session.records.map(record => record.tokensPerSecond), [30, 110, 100]);
+    assert.equal(first.session.records[0].dataSource, 'hermes_log');
+    assert.equal(first.session.records[0].model, 'vendor/flash-model:free');
+    assert.equal(first.session.records[0].cacheHitRate, undefined);
+    assert.doesNotMatch(JSON.stringify(first), /PRIVATE_CHAT_CONTENT|remote-one|remote-two|hermes-remote/);
     assert.deepEqual(await remote.read(target, { fresh: true }), first);
     assert.equal(launches, 1);
 
@@ -81,12 +90,19 @@ test('one SSH stream merges project sessions and receives new records without se
       observed = await remote.read(target);
       if (observed.session?.records[0]?.outputTokens === 500) break;
     }
-    assert.deepEqual(observed.session.records.map(record => record.outputTokens), [500, 330, 200]);
+    assert.deepEqual(observed.session.records.map(record => record.outputTokens), [500, 60, 330, 200]);
     assert.equal(requests, sends, 'no repeat remote query');
   } finally {
     await remote.dispose();
   }
   assert.ok(child.exitCode !== null || child.signalCode !== null, 'closing the project releases the collector');
+});
+
+test('Hermes remote model IDs can carry a namespace while filesystem paths stay private', () => {
+  const record = { id: 'sample', completedAt: Date.now(), provider: 'hermes', dataSource: 'hermes_log' };
+  assert.equal(remoteRecord({ ...record, model: 'vendor/model:free' }).model, 'vendor/model:free');
+  assert.equal(remoteRecord({ ...record, model: '/home/demo/workspace' }).model, undefined);
+  assert.equal(remoteRecord({ ...record, model: 'C:\\workspace\\model' }).model, undefined);
 });
 
 test('the collector rejects a request for a different project directory', async t => {
@@ -142,6 +158,12 @@ test('remote usage counts the full history once per host and keeps totals when i
   const codexHome = path.join(home, '.codex'), logs = path.join(codexHome, 'sessions');
   await mkdir(logs, { recursive: true });
   const sessions = 202, completed = new Date(), started = new Date(completed.getTime() - 1_000);
+  const hermesHome = path.join(home, '.hermes'), hermesLogs = path.join(hermesHome, 'logs');
+  await mkdir(hermesLogs, { recursive: true });
+  const occurredAt = `${localDayKey(completed.getTime())} ${completed.toTimeString().slice(0, 8)},000`;
+  await writeFile(path.join(hermesLogs, 'agent.log'),
+    `${occurredAt} INFO [hermes-remote] agent.conversation_loop: API call #1: model=test-model provider=example in=7 out=5 total=12 latency=2.0s\n`);
+  const expectedTokens = sessions * 5 + 3 + 12;
   await Promise.all(Array.from({ length: sessions }, (_, index) => {
     const sessionId = 'usage-' + index;
     const rows = [
@@ -159,7 +181,8 @@ test('remote usage counts the full history once per host and keeps totals when i
       launches++;
       const child = spawn(process.execPath, ['--input-type=commonjs', '-e', collectorCommand(token).split('"')[1]], {
         cwd: home, stdio: ['pipe', 'pipe', 'ignore'],
-        env: { ...process.env, HOME: home, USERPROFILE: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome,
+        env: { ...process.env, HOME: home, USERPROFILE: home, LOCALAPPDATA: home, ORCA_USER_DATA_PATH: home, CODEX_HOME: codexHome,
+          HERMES_HOME: hermesHome,
           CLAUDE_CONFIG_DIR: path.join(home, '.claude'), PI_CODING_AGENT_DIR: path.join(home, '.pi'),
           XDG_DATA_HOME: path.join(home, 'data'), OPENCODE_DB: ':memory:' }
       });
@@ -188,20 +211,20 @@ test('remote usage counts the full history once per host and keeps totals when i
   }
   try {
     await refresh();
-    assert.equal(index.summary().windows.today.requests, sessions + 1);
-    assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
-    assert.equal(index.leaderboardUsage().tokens, sessions * 5 + 3);
+    assert.equal(index.summary().windows.today.requests, sessions + 2);
+    assert.equal(index.summary().windows.today.tokens, expectedTokens);
+    assert.equal(index.leaderboardUsage().tokens, expectedTokens);
     assert.equal(index.leaderboardUsage().ready, true);
     assert.equal(index.leaderboardHistory().ready, true);
-    assert.equal(index.leaderboardHistory().scores[0].tokens, sessions * 5 + 3);
+    assert.equal(index.leaderboardHistory().scores[0].tokens, expectedTokens);
     assert.equal(launches, 1);
     const initialWrites = writes;
     await refresh();
     assert.equal(writes - initialWrites, 2, 'only the two descriptor pages are read again');
     online = false;
     await refresh();
-    assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
-    assert.equal(index.leaderboardUsage().tokens, sessions * 5 + 3);
+    assert.equal(index.summary().windows.today.tokens, expectedTokens);
+    assert.equal(index.leaderboardUsage().tokens, expectedTokens);
   } finally {
     await reader.dispose();
   }

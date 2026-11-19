@@ -5,15 +5,16 @@ import path from 'node:path';
 import { createLiveSessionReader, discoverUsageUnits, normalizeComparePath } from './data.mjs';
 import { leaderboardDay, leaderboardDayStart, MAX_WINDOW_DAYS, USAGE_READ_BATCH } from './usage-summary.mjs';
 
-export const COLLECTOR_FILES = ['remote-collector.mjs', 'data.mjs', 'data-paths.mjs', 'parsers.mjs', 'usage-summary.mjs'];
+export const COLLECTOR_FILES = ['remote-collector.mjs', 'data.mjs', 'data-paths.mjs', 'parsers.mjs', 'usage-summary.mjs', 'hermes.mjs'];
 export const MAX_RESPONSE_BASE64 = 1024 * 1024;
 export const USAGE_PAGE_SIZE = 200;
-const PROVIDERS = new Set(['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity']);
+const PROVIDERS = new Set(['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity', 'hermes']);
 const NUMBERS = [
   'completedAt', 'createdAtSec', 'freshInputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens',
   'durationMs', 'firstTokenMs', 'generationMs', 'tokensPerSecond', 'cacheHitRate'
 ];
 const clean = value => typeof value === 'string' && value.length <= 4096 && !/[\u0000-\u001f\u007f]/.test(value);
+const hermesModelId = /^[a-z\d][a-z\d._-]*\/[a-z\d][a-z\d._:-]*$/i;
 const liveSessions = createLiveSessionReader();
 
 export function remoteRecord(record) {
@@ -22,13 +23,17 @@ export function remoteRecord(record) {
   const result = {
     id: createHash('sha256').update(record.id).digest('hex').slice(0, 24),
     provider: record.provider,
-    dataSource: record.dataSource === 'proxy' ? 'proxy' : 'session_log'
+    dataSource: record.dataSource === 'proxy' || (record.provider === 'hermes' && record.dataSource === 'hermes_log')
+      ? record.dataSource : 'session_log'
   };
   for (const field of NUMBERS) {
     if (Number.isFinite(record[field]) && record[field] >= 0) result[field] = record[field];
   }
   if (result.cacheHitRate > 1) delete result.cacheHitRate;
-  if (clean(record.model) && record.model.length <= 128 && !/[/\\]/.test(record.model)) result.model = record.model;
+  if (clean(record.model) && record.model.length <= 128 &&
+      (!/[/\\]/.test(record.model) || (record.provider === 'hermes' && hermesModelId.test(record.model)))) {
+    result.model = record.model;
+  }
   if (record.isEstimatedSpeed === true) result.isEstimatedSpeed = true;
   if (record.isSubagent === true) result.isSubagent = true;
   return result;

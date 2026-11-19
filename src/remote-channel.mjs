@@ -417,7 +417,7 @@ const isObject = value => value !== null && typeof value === 'object' && !Array.
 function validUsageDays(days) {
   return isObject(days) && Object.entries(days).every(([day, agents]) =>
     /^\d{4}-\d{2}-\d{2}$/.test(day) && isObject(agents) && Object.entries(agents).every(([provider, models]) =>
-      /^(codex|claude|opencode2?|pi|antigravity)$/.test(provider) && isObject(models) && Object.entries(models).every(([model, counters]) =>
+      /^(codex|claude|opencode2?|pi|antigravity|hermes)$/.test(provider) && isObject(models) && Object.entries(models).every(([model, counters]) =>
         model.length <= 128 && Array.isArray(counters) && counters.length === 8 &&
         counters.every(value => Number.isFinite(value) && value >= 0))));
 }
