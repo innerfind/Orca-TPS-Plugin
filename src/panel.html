@@ -91,7 +91,7 @@
     .section-title { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.6; font-weight: 700; }
     .section-detail { margin: 0; color: var(--muted); font-size: 11px; }
     .ladder-card { padding: 12px 16px; }
-    .ladder-date { font-variant-numeric: tabular-nums; }
+    .ladder-refresh-time { font-variant-numeric: tabular-nums; }
     .ladder-tabs { margin-top: 6px; }
     .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
     .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
@@ -115,6 +115,8 @@
       position: relative; display: inline-block; flex-shrink: 0; width: 48px; height: 48px;
       filter: drop-shadow(0 1px 1px rgb(0 0 0 / 25%));
     }
+    .ladder-medal-7 { --medal-phase: -1.2s; }
+    .ladder-medal-30 { --medal-phase: -2.4s; }
     .ladder-medal[data-place="1"] {
       --medal-light: #fff3bc; --medal-mid: #e6b541; --medal-dark: #8b5515;
       --medal-face-light: #ffedb0; --medal-face-dark: #cf9b36;
@@ -165,9 +167,9 @@
         var(--medal-dark) 69%, var(--medal-mid) 83%, var(--medal-light));
     }
     .ladder-medal-emblem::before {
-      content: ""; position: absolute; inset-block: 0; left: 0; width: 39%; pointer-events: none;
-      background: linear-gradient(90deg, transparent, var(--medal-sheen), transparent);
-      animation: medal-sweep 4.5s ease-in-out infinite;
+      content: ""; position: absolute; inset-block: 0; left: 0; width: 48%; pointer-events: none;
+      background: linear-gradient(90deg, transparent, var(--medal-sheen) 45%, var(--medal-light) 52%, transparent);
+      animation: medal-sweep 3.6s ease-in-out var(--medal-phase, 0s) infinite;
     }
     .ladder-medal-mark {
       position: relative; display: grid; place-items: center; border-radius: 50%;
@@ -176,11 +178,24 @@
       color: var(--medal-ink); font: 700 14px/1 Georgia, serif; font-variant-numeric: lining-nums tabular-nums;
       text-shadow: 0 .75px 0 var(--medal-light);
     }
-    .ladder-medal-7 .ladder-medal-emblem::before { animation-delay: -1.2s; }
-    .ladder-medal-30 .ladder-medal-emblem::before { animation-delay: -2.4s; }
+    .ladder-medal::before, .ladder-medal::after {
+      content: ""; position: absolute; z-index: 1; opacity: 0; pointer-events: none;
+      clip-path: polygon(50% 0, 62% 38%, 100% 50%, 62% 62%, 50% 100%, 38% 62%, 0 50%, 38% 38%);
+      background: radial-gradient(circle, var(--medal-light), var(--medal-sheen));
+      animation: medal-twinkle 3.6s ease-in-out var(--medal-phase, 0s) infinite;
+    }
+    .ladder-medal::before { left: 9px; top: 13px; width: 10px; height: 10px; }
+    .ladder-medal::after {
+      right: 8px; top: 31px; width: 8px; height: 8px;
+      animation-delay: calc(var(--medal-phase, 0s) + .55s);
+    }
     @keyframes medal-sweep {
-      0%, 60% { transform: translateX(-160%) skewX(-22deg); }
-      85%, 100% { transform: translateX(360%) skewX(-22deg); }
+      0%, 34% { transform: translateX(-160%) skewX(-22deg); }
+      74%, 100% { transform: translateX(280%) skewX(-22deg); }
+    }
+    @keyframes medal-twinkle {
+      0%, 37%, 66%, 100% { opacity: 0; transform: scale(.35); }
+      50% { opacity: 1; transform: scale(1); }
     }
     .ladder-title-actions { display: flex; align-items: center; gap: 6px; }
     .ladder-refresh { width: 28px; min-height: 28px; padding: 0; border-radius: 9px; }
@@ -188,7 +203,11 @@
     .ladder-preview p { margin: 0 0 6px; }
     .ladder-preview .ladder-note { margin-bottom: 8px; }
     .ladder-upload { margin-top: 7px; }
-    .ladder-upload-result { font-variant-numeric: tabular-nums; }
+    .ladder-upload-feedback {
+      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: baseline;
+      font-variant-numeric: tabular-nums;
+    }
+    .ladder-upload-result { text-align: end; overflow-wrap: anywhere; }
     .ladder-upload-result[data-result="success"] { color: var(--green); }
     .ladder-upload-result[data-result="failure"] { color: var(--error); }
     .ladder-rows { margin: 6px 0 0; padding: 0; list-style: none; }
@@ -331,7 +350,7 @@
     @media (prefers-reduced-motion: reduce) {
       .refresh.is-busy svg { animation: none; }
       .refresh:active:not(:disabled) { transform: none; }
-      .ladder-medal-emblem::before { animation: none; opacity: 0; }
+      .ladder-medal::before, .ladder-medal::after, .ladder-medal-emblem::before { animation: none; opacity: 0; }
     }
   </style>
 </head>
@@ -387,8 +406,10 @@
           <button class="refresh ladder-secondary" id="ladder-save-upload" type="submit" disabled>保存设置</button>
           <button class="refresh ladder-primary" id="ladder-preview" type="button" disabled>手动上传</button>
         </form>
-        <p class="ladder-note" id="ladder-upload-note"></p>
-        <p class="ladder-note ladder-upload-result" id="ladder-upload-result" role="status" hidden></p>
+        <div class="ladder-upload-feedback">
+          <p class="ladder-note" id="ladder-upload-note"></p>
+          <p class="ladder-note ladder-upload-result" id="ladder-upload-result" role="status" hidden></p>
+        </div>
         <div class="ladder-preview ladder-account-actions" id="ladder-confirmation" hidden>
           <p id="ladder-preview-text"></p>
           <p class="ladder-note">上传会更新当天的成绩。</p>
@@ -406,7 +427,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
             </button>
           </div>
-          <p class="section-detail ladder-date" id="ladder-summary"></p>
+          <time class="section-detail ladder-refresh-time" id="ladder-refresh-time" hidden></time>
         </div>
         <div class="war-tabs ladder-tabs" role="group" aria-label="榜单范围">
           <button class="war-tab" type="button" data-rank-days="1" aria-pressed="true">今天</button>
@@ -992,7 +1013,8 @@
       const group = document.getElementById('leaderboard');
       const lifetime = new AbortController();
       const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const boardDay = (daysAgo = 0) => new Date(Date.now() + 8 * 60 * 60 * 1000 - daysAgo * 86_400_000).toISOString().slice(0, 10);
+      const shortClock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+      const boardDay = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const rankTabs = [...group.querySelectorAll('[data-rank-days]')];
       const periods = [
         { days: 1, mark: 'Ⅰ', title: '今日' }, { days: 7, mark: '7', title: '7 天' },
@@ -1128,8 +1150,11 @@
         log.dataset.result = success ? 'success' : 'failure';
         const name = { automatic: '自动上传', manual: '手动上传', history: '历史补传' }[record?.kind] ?? '上传';
         const detail = record?.code === 'initialized' ? '已完成' : success ? '成功' : '失败 · ' + (messages[record?.code] ?? '请重试。');
-        const outcome = record ? clock.format(record.at) + ' · ' + name + detail : '';
+        const fullOutcome = record ? clock.format(record.at) + ' · ' + name + detail : '';
+        const outcome = success ? name + detail + ' ' + shortClock.format(record.at) : fullOutcome;
         if (log.textContent !== outcome) log.textContent = outcome;
+        const tooltip = success ? fullOutcome : '';
+        if (log.title !== tooltip) log.title = tooltip;
       }
 
       function render(code = messageCode) {
@@ -1142,13 +1167,21 @@
         const selected = model?.days === rankDays;
         const readyBoard = board.day === renderedDay && Array.isArray(board.rows);
         const live = selected && readyBoard;
-        const cachedRanking = cachedRankings.get(rankDays);
-        const ranking = live ? board : cachedRanking?.day === renderedDay ? cachedRanking : null;
+        const cached = cachedRankings.get(rankDays);
+        const cachedRanking = cached?.day === renderedDay ? cached : null;
+        const ranking = live ? board : cachedRanking;
         const freshness = element('freshness');
-        const notice = ranking && !live ? '上次更新 ' + clock.format(ranking.updatedAt)
-          : !ranking && !(selected && board.code) ? '正在加载榜单…' : '';
+        const notice = !ranking && !(selected && board.code) ? '正在加载榜单…' : '';
         if (freshness.textContent !== notice) freshness.textContent = notice;
         freshness.hidden = !notice;
+        const refreshedAt = (live ? model.updatedAt : null) ?? cachedRanking?.updatedAt ?? null;
+        const refreshTime = element('refresh-time');
+        refreshTime.hidden = refreshedAt === null;
+        if (refreshedAt !== null) {
+          refreshTime.dateTime = new Date(refreshedAt).toISOString();
+          refreshTime.title = clock.format(refreshedAt);
+          refreshTime.textContent = '刷新于 ' + shortClock.format(refreshedAt);
+        }
         const signedIn = snapshot.signedIn ?? account.authenticated;
         const checkingLogin = typeof signedIn !== 'boolean';
         element('controls').hidden = false;
@@ -1165,8 +1198,6 @@
           (account.banned ? messages.banned : boardProblem) ??
           (locked ? messages.locked : messages[historyProblem] ?? (initializing ? messages.history_pending : sessionStatus));
         element('rank-title').textContent = rankDays === 1 ? '今日排名' : '累计排名';
-        element('summary').textContent = rankDays === 1 ? renderedDay + ' · 北京时间'
-          : boardDay(rankDays - 1) + ' 至 ' + renderedDay + ' · 北京时间';
         element('empty').textContent = rankDays === 1 ? '今日还没有人提交。' : '这段时间还没有成绩。';
         element('empty').hidden = !ranking || ranking.rows.length > 0;
         const username = signedIn ? account.username : '';
