@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>对话速度</title>
+  <title>TPS Plugin</title>
   <style>
     :root {
       color-scheme: light;
@@ -68,7 +68,7 @@
     }
     button { font: inherit; }
     .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-    .heading { min-width: 0; }
+    .panel-summary { min-width: 0; }
     h1 { margin: 0; font-size: 18px; line-height: 1.4; letter-spacing: -.3px; font-weight: 750; }
     .summary { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
     .refresh {
@@ -81,6 +81,26 @@
     .refresh:active:not(:disabled) { transform: translateY(1px); }
     .refresh:disabled { cursor: default; opacity: .6; }
     .refresh:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+    .panel-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 10px; border-bottom: 1px solid var(--line); }
+    .panel-tab { min-width: 0; padding: 8px 2px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--muted); font-weight: 650; cursor: pointer; }
+    .panel-tab[aria-selected="true"] { border-bottom-color: var(--blue); color: var(--blue); }
+    .panel-tab:focus-visible, .panel-view:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+    .panel-view { margin-top: 12px; }
+    .ladder-date { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .ladder-actions .refresh { border-radius: 8px; min-height: 30px; }
+    .ladder-primary { color: var(--surface); background: var(--blue); }
+    .ladder-note { color: var(--muted); margin: 6px 0; font-size: 11px; }
+    .ladder-status:not(:empty) { margin: 8px 0; color: var(--ink); }
+    .ladder-mine { margin: 8px 0 0; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .ladder-preview { margin: 8px 0; border-left: 3px solid var(--blue); padding-left: 8px; }
+    .ladder-preview p { margin: 0 0 5px; }
+    .ladder-rows { padding: 0; margin: 8px 0; list-style: none; }
+    .ladder-rows li { display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto; gap: 6px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+    .ladder-rows .ladder-self { color: var(--blue); }
+    .ladder-rows span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ladder-rows time { grid-column: 2 / 4; color: var(--muted); font-size: 10px; }
+    .ladder-time { max-width: 9rem; padding: 4px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface); font: inherit; }
     .refresh.is-busy svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .messages:empty { display: none; }
@@ -149,7 +169,6 @@
     .war-meta span { white-space: nowrap; }
     .war-empty { margin: 10px 2px 2px; color: var(--muted); font-size: 12px; text-align: center; }
     .war-empty[hidden] { display: none; }
-    .usage-tabs { margin-top: 10px; }
     .rank-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
     .rank-title { font-size: 12px; font-weight: 700; }
     .rank-sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
@@ -157,14 +176,6 @@
     .rank-tps { flex-shrink: 0; color: var(--green); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .heat { position: relative; margin: 8px 0 0; padding: 10px 14px 8px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
     .heat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-    .usage { margin-top: 12px; }
-    .usage-summary { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 10px 14px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); cursor: pointer; list-style: none; }
-    .usage-summary::-webkit-details-marker { display: none; }
-    .usage-summary:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-    .usage-summary::after { content: "▾"; flex-shrink: 0; color: var(--muted); font-size: 11px; transition: transform .15s ease; }
-    .usage:not([open]) > .usage-summary::after { transform: rotate(-90deg); }
-    .usage-title { flex-shrink: 0; font-size: 12px; font-weight: 700; }
-    .usage-brief { min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
     .heat-title { font-size: 12px; font-weight: 700; }
     .heat-sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
     .heat-scroll { margin: 8px -4px 0; padding: 0 4px 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
@@ -206,24 +217,57 @@
   </style>
 </head>
 <body>
-  <main id="panel" aria-label="当前对话速度">
-    <header class="panel-header">
-      <div class="heading">
-        <h1>对话速度</h1>
-        <p class="summary" id="summary">当前频道 · 最近 0 次请求</p>
-      </div>
-      <button class="refresh" id="refresh" data-testid="refresh" type="button" aria-label="刷新统计">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
-        <span>刷新</span>
-      </button>
-    </header>
-    <div class="message message-error" id="error" data-testid="error" role="alert" hidden></div>
-    <details class="usage" id="usage" data-testid="usage-group">
-      <summary class="usage-summary" data-testid="usage-summary">
-        <span class="usage-title">用量统计</span>
-        <span class="usage-brief" id="usage-brief" data-testid="usage-brief">正在统计…</span>
-      </summary>
-      <div class="war-tabs usage-tabs" role="tablist" aria-label="统计范围">
+  <main id="panel" aria-labelledby="panel-title">
+    <h1 id="panel-title">TPS Plugin</h1>
+    <div class="panel-tabs" id="panel-tabs" role="tablist" aria-label="TPS Plugin 功能">
+      <button class="panel-tab" id="tab-current" type="button" role="tab" aria-controls="current-data" aria-selected="true">当前数据</button>
+      <button class="panel-tab" id="tab-usage" type="button" role="tab" aria-controls="usage" aria-selected="false" tabindex="-1">个人统计</button>
+      <button class="panel-tab" id="tab-leaderboard" type="button" role="tab" aria-controls="leaderboard" aria-selected="false" tabindex="-1">天梯榜</button>
+    </div>
+    <section class="panel-view" id="leaderboard" role="tabpanel" aria-labelledby="tab-leaderboard" tabindex="0" hidden>
+      <p class="ladder-date" id="ladder-summary">今日用量</p>
+        <p class="ladder-status" id="ladder-status" role="status"></p>
+        <div id="ladder-sign-in" class="ladder-actions" hidden>
+          <button class="refresh" id="ladder-login" type="button" disabled>用 GitHub 登录</button>
+          <span class="ladder-note">登录后可以提交今日用量。</span>
+        </div>
+        <div class="ladder-preview" id="ladder-login-wait" hidden>
+          <p>请在浏览器完成 GitHub 授权。授权成功后榜单会自动更新。</p>
+          <div class="ladder-actions">
+            <button class="refresh" id="ladder-stop-login" type="button">取消</button>
+          </div>
+        </div>
+        <div id="ladder-account" hidden>
+          <div class="ladder-actions">
+            <button class="refresh" id="ladder-update" type="button">刷新榜单</button>
+            <button class="refresh" id="ladder-logout" type="button">退出 GitHub 登录</button>
+          </div>
+          <p class="ladder-mine" id="ladder-mine"></p>
+          <p class="ladder-note" id="ladder-usage"></p>
+          <button class="refresh" id="ladder-preview" type="button">提交今日用量</button>
+          <div class="ladder-preview" id="ladder-confirmation" hidden>
+            <p id="ladder-preview-text"></p><p class="ladder-note">每天限交一次，提交后无法修改或撤回。</p>
+            <div class="ladder-actions">
+              <button class="refresh ladder-primary" id="ladder-submit" type="button">确认提交</button>
+              <button class="refresh" id="ladder-cancel" type="button">取消</button>
+            </div>
+          </div>
+          <details>
+            <summary>定时提交</summary>
+            <form class="ladder-actions" id="ladder-schedule">
+              <label for="ladder-time">本地时间</label>
+              <input class="ladder-time" id="ladder-time" type="time" required>
+              <button class="refresh" type="submit">保存定时</button>
+              <button class="refresh" id="ladder-disable" type="button">关闭定时</button>
+            </form>
+            <p class="ladder-note" id="ladder-schedule-note"></p>
+          </details>
+        </div>
+        <ol class="ladder-rows" id="ladder-rows" aria-label="今日用量名次"></ol>
+        <p class="ladder-note" id="ladder-empty" hidden>今日还没有人提交。</p>
+    </section>
+    <section class="panel-view" id="usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" data-testid="usage-group" hidden>
+      <div class="war-tabs" role="tablist" aria-label="统计范围">
         <button class="war-tab" type="button" role="tab" data-range="today" aria-selected="true" data-testid="range-today">当日战况</button>
         <button class="war-tab" type="button" role="tab" data-range="week" aria-selected="false" data-testid="range-week">近一周战况</button>
         <button class="war-tab" type="button" role="tab" data-range="month" aria-selected="false" data-testid="range-month">近一月战况</button>
@@ -231,7 +275,7 @@
     <section class="war" id="war" aria-label="用量战况">
       <div class="war-totals">
         <div>
-          <span class="war-label">消耗 token（含缓存读写）</span>
+          <span class="war-label">用量（含缓存读写）</span>
           <strong class="war-value tokens" id="war-tokens" data-testid="war-tokens">—</strong>
         </div>
         <div>
@@ -255,12 +299,12 @@
     <section class="heat" id="heat" data-testid="heatmap">
       <div class="heat-head">
         <span class="heat-title">用量热力图</span>
-        <span class="heat-sub" id="heat-sub">近一年每日 token（含缓存）</span>
+        <span class="heat-sub" id="heat-sub">近一年每日用量（MB，含缓存）</span>
       </div>
       <div class="heat-scroll" id="heat-scroll">
         <div class="heat-canvas">
           <div class="heat-months" id="heat-months" aria-hidden="true"></div>
-          <div class="heat-grid" id="heat-grid" role="img" aria-label="近一年每日 token 消耗热力图"></div>
+          <div class="heat-grid" id="heat-grid" role="img" aria-label="近一年每日用量热力图（MB）"></div>
         </div>
       </div>
       <div class="heat-foot">
@@ -269,18 +313,28 @@
       </div>
       <div class="heat-tip" id="heat-tip" role="tooltip" hidden></div>
     </section>
-    </details>
-    <div class="messages" id="warnings"></div>
-    <p class="loading" id="loading" data-testid="loading" role="status" aria-live="polite">正在读取当前对话…</p>
-    <ol class="records" id="records" aria-label="单次请求速度记录"></ol>
-    <div class="empty" id="empty" data-testid="empty" hidden>
-      <span class="empty-icon" aria-hidden="true">🚀</span>
-      <p class="empty-text" id="empty-text"></p>
-    </div>
-    <footer class="footer">
-      <p>单次请求速度（剔除工具耗时）：日志估算需 ≥200 token 且 ≥1s（≈），代理精确速度扣首字需 ≥100 token。</p>
-      <p id="updated" hidden></p>
-    </footer>
+    </section>
+    <section class="panel-view" id="current-data" role="tabpanel" aria-labelledby="tab-current" tabindex="0">
+      <div class="panel-header">
+        <p class="summary panel-summary" id="summary">当前频道 · 最近 0 次请求</p>
+        <button class="refresh" id="refresh" data-testid="refresh" type="button" aria-label="刷新当前数据">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
+          <span>刷新</span>
+        </button>
+      </div>
+      <div class="message message-error" id="error" data-testid="error" role="alert" hidden></div>
+      <div class="messages" id="warnings"></div>
+      <p class="loading" id="loading" data-testid="loading" role="status" aria-live="polite">正在读取当前对话…</p>
+      <ol class="records" id="records" aria-label="单次请求速度记录"></ol>
+      <div class="empty" id="empty" data-testid="empty" hidden>
+        <span class="empty-icon" aria-hidden="true">🚀</span>
+        <p class="empty-text" id="empty-text"></p>
+      </div>
+      <footer class="footer">
+        <p>单次请求速度剔除工具耗时。日志估算需输出 ≥0.2 KB 且耗时 ≥1s（≈），代理精确速度扣首字需输出 ≥0.1 KB。</p>
+        <p id="updated" hidden></p>
+      </footer>
+    </section>
   </main>
 
   <template id="record-template">
@@ -308,7 +362,7 @@
       <dl class="metrics">
         <div class="metric output">
           <dt class="metric-label"><span aria-hidden="true">📦</span>输出</dt>
-          <dd class="metric-value-line"><span class="metric-value" data-testid="output-value"></span><span class="metric-unit">token</span></dd>
+          <dd class="metric-value-line"><span class="metric-value" data-testid="output-value"></span><span class="metric-unit">KB</span></dd>
         </div>
         <div class="metric duration">
           <dt class="metric-label"><span aria-hidden="true">⏳</span>耗时</dt>
@@ -323,10 +377,44 @@
   </template>
 
   <script>
+    const formatTokenMB = (() => {
+      const standard = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const precise = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 });
+      return tokens => {
+        if (!Number.isFinite(tokens) || tokens < 0) return '—';
+        const format = tokens > 0 && tokens < 1_000_000 ? precise : standard;
+        return format.format(tokens / 1_000_000) + ' MB';
+      };
+    })();
+
     (() => {
       'use strict';
       const byId = id => document.getElementById(id);
-      const ui = Object.fromEntries(['panel', 'summary', 'refresh', 'error', 'warnings', 'loading', 'records', 'empty', 'empty-text', 'updated', 'record-template'].map(id => [id, byId(id)]));
+      const ui = Object.fromEntries(['current-data', 'summary', 'refresh', 'error', 'warnings', 'loading', 'records', 'empty', 'empty-text', 'updated', 'record-template'].map(id => [id, byId(id)]));
+      const views = [...byId('panel-tabs').children];
+      for (const [index, tab] of views.entries()) {
+        tab.addEventListener('click', () => {
+          for (const view of views) {
+            const selected = view === tab;
+            view.setAttribute('aria-selected', String(selected));
+            view.tabIndex = selected ? 0 : -1;
+            byId(view.getAttribute('aria-controls')).hidden = !selected;
+          }
+          byId(tab.getAttribute('aria-controls')).dispatchEvent(new Event('tps-view-opened'));
+        });
+        tab.addEventListener('keydown', event => {
+          const next = {
+            ArrowLeft: (index + views.length - 1) % views.length,
+            ArrowRight: (index + 1) % views.length,
+            Home: 0,
+            End: views.length - 1
+          }[event.key];
+          if (next === undefined) return;
+          event.preventDefault();
+          views[next].focus();
+          views[next].click();
+        });
+      }
       const lifetime = new AbortController();
       const retiredInstances = new Set();
       const subscriptions = [];
@@ -340,6 +428,8 @@
       const bridge = window.orca?.plugin;
 
       const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
+      const outputKBFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 3 });
+      const outputKB = tokens => numeric(tokens) ? outputKBFormat.format(tokens / 1_000) : '—';
       const isSessionLog = record => typeof record?.dataSource === 'string' && record.dataSource.length > 0 && record.dataSource !== 'proxy';
       function number(value, fraction = 0) {
         return numeric(value) ? value.toLocaleString('zh-CN', { minimumFractionDigits: fraction, maximumFractionDigits: fraction }) : '—';
@@ -367,12 +457,12 @@
         }
         if (record?.dataSource === 'proxy') {
           if (!numeric(record.firstTokenMs) || record.firstTokenMs <= 0) return '非流式或缺少首字时间，不计精确速度';
-          if (numeric(record.outputTokens) && record.outputTokens < 100) return `输出 ${record.outputTokens} token < 100（代理精确速度门槛）`;
+          if (numeric(record.outputTokens) && record.outputTokens < 100) return `输出 ${outputKB(record.outputTokens)} KB < 0.1 KB（代理精确速度门槛）`;
           return '纯生成耗时不足 100 毫秒，不计速度';
         }
         if (session) {
           if (!numeric(record?.durationMs) || record.durationMs <= 0) return '缺少有效请求耗时';
-          if (numeric(record.outputTokens) && record.outputTokens < 200) return `输出 ${record.outputTokens} token < 200（CC Switch 日志估算门槛）`;
+          if (numeric(record.outputTokens) && record.outputTokens < 200) return `输出 ${outputKB(record.outputTokens)} KB < 0.2 KB（CC Switch 日志估算门槛）`;
           if (record.durationMs < 1000) return `请求耗时 ${record.durationMs}ms < 1s（CC Switch 日志估算门槛）`;
         }
         return '速度未知';
@@ -424,7 +514,7 @@
         }
 
         setValue(find('speed-value'), formatTps(record), speedTooltip(record));
-        setValue(find('output-value'), number(record.outputTokens), numeric(record.outputTokens) ? `${record.outputTokens} token` : '输出用量未知');
+        setValue(find('output-value'), outputKB(record.outputTokens), numeric(record.outputTokens) ? `${outputKB(record.outputTokens)} KB` : '输出用量未知');
 
         const hasDuration = numeric(record.durationMs) && record.durationMs > 0;
         const seconds = hasDuration ? record.durationMs / 1000 : null;
@@ -467,7 +557,7 @@
         model.title = model.textContent;
         const amount = document.createElement('span');
         amount.className = 'war-amount';
-        amount.textContent = formatCount(row.tokens);
+        amount.textContent = formatTokenMB(row.tokens);
         head.append(agent, model, amount);
         const track = document.createElement('div');
         track.className = 'war-track';
@@ -477,7 +567,7 @@
         track.append(fill);
         const meta = document.createElement('div');
         meta.className = 'war-meta';
-        for (const part of [`${formatCount(row.requests)} 次请求`, `新输入 ${formatCount(row.freshInput)}`, `输出 ${formatCount(row.output)}`, `缓存读取 ${formatCount(row.cacheRead)}`]) {
+        for (const part of [`${formatCount(row.requests)} 次请求`, `新输入 ${formatTokenMB(row.freshInput)}`, `输出 ${formatTokenMB(row.output)}`, `缓存读取 ${formatTokenMB(row.cacheRead)}`]) {
           const span = document.createElement('span');
           span.textContent = part;
           meta.append(span);
@@ -487,14 +577,10 @@
       }
       function renderUsage() {
         const range = usageSummary?.windows?.[usageRange] ?? null;
-        const today = usageSummary?.windows?.today;
-        byId('usage-brief').textContent = today
-          ? `当日 ${formatCount(today.tokens)} · ${formatCount(today.requests)} 次`
-          : (usageProblem || '正在统计…');
         for (const tab of document.querySelectorAll('[data-range]')) {
           tab.setAttribute('aria-selected', String(tab.dataset.range === usageRange));
         }
-        byId('war-tokens').textContent = range ? formatCount(range.tokens) : '—';
+        byId('war-tokens').textContent = range ? formatTokenMB(range.tokens) : '—';
         byId('war-requests').textContent = range ? formatCount(range.requests) : '—';
         const list = Array.isArray(range?.rows) ? range.rows : [];
         const max = list.reduce((top, row) => Math.max(top, numeric(row.tokens) ? row.tokens : 0), 0);
@@ -502,6 +588,7 @@
         byId('war-empty').hidden = !usageSummary || list.length > 0;
         const notes = [];
         if (usageProblem) notes.push(usageProblem);
+        else if (!usageSummary) notes.push('正在统计…');
         const progress = usageSummary?.progress;
         if (progress && progress.done < progress.total) notes.push(`正在统计历史记录 ${progress.done}/${progress.total}，数字会逐步完善`);
         if (range && numeric(range.cacheHitRate)) notes.push(`缓存命中率 ${(range.cacheHitRate * 100).toFixed(1)}%`);
@@ -605,7 +692,7 @@
             cell.dataset.tokens = String(tokens);
             cell.dataset.requests = String(numeric(entry?.requests) ? entry.requests : 0);
             cell.dataset.label = dayLabel(date);
-            cell.setAttribute('aria-label', `${cell.dataset.label}：${tokens > 0 ? `${formatCount(tokens)} token` : '无用量'}`);
+            cell.setAttribute('aria-label', `${cell.dataset.label}：${tokens > 0 ? formatTokenMB(tokens) : '无用量'}`);
             cells.push(cell);
             if (weekday === 0 && !future && date.getMonth() !== lastMonth) {
               lastMonth = date.getMonth();
@@ -618,12 +705,12 @@
         }
         grid.replaceChildren(...cells);
         months.replaceChildren(...labels);
-        byId('heat-total').textContent = usageSummary ? `近一年 ${formatCount(total)} token · ${activeDays} 天有用量` : '正在统计…';
+        byId('heat-total').textContent = usageSummary ? `近一年 ${formatTokenMB(total)} · ${activeDays} 天有用量` : '正在统计…';
       }
       const heatTip = byId('heat-tip');
       function showHeatTip(cell) {
         heatTip.textContent = Number(cell.dataset.tokens) > 0
-          ? `${cell.dataset.label} · ${formatCount(Number(cell.dataset.tokens))} token · ${formatCount(Number(cell.dataset.requests))} 次请求`
+          ? `${cell.dataset.label} · ${formatTokenMB(Number(cell.dataset.tokens))} · ${formatCount(Number(cell.dataset.requests))} 次请求`
           : `${cell.dataset.label} · 无用量记录`;
         heatTip.hidden = false;
         const host = byId('heat').getBoundingClientRect(), rect = cell.getBoundingClientRect();
@@ -640,8 +727,7 @@
       byId('heat-grid').addEventListener('pointerleave', () => { heatTip.hidden = true; });
       byId('heat-scroll').addEventListener('scroll', () => { heatTip.hidden = true; }, { passive: true });
       const usageGroup = byId('usage');
-      usageGroup.addEventListener('toggle', () => {
-        if (!usageGroup.open) return;
+      usageGroup.addEventListener('tps-view-opened', () => {
         const scroller = byId('heat-scroll');
         scroller.scrollLeft = scroller.scrollWidth;   // open on the latest weeks, as GitHub does
       });
@@ -650,7 +736,7 @@
         const records = (current?.records ?? []).filter(record => record && typeof record === 'object')
           .slice().sort((a, b) => (numeric(b.completedAt) ? b.completedAt : 0) - (numeric(a.completedAt) ? a.completedAt : 0)).slice(0, 100);
         const working = busy || Boolean(current?.loading);
-        ui.panel.setAttribute('aria-busy', String(working));
+        ui['current-data'].setAttribute('aria-busy', String(working));
         const scopeLabel = current?.activeSession?.provider === 'channel'
           ? (current.activeSession.title || '当前频道')
           : '当前对话';
@@ -681,7 +767,10 @@
         ui['empty-text'].textContent = String(current?.emptyMessage || '当前频道还没有可统计的请求记录').slice(0, 1000);
         ui.updated.hidden = !date(current?.updatedAt);
         ui.updated.textContent = `更新于 ${timeLabel(current?.updatedAt)}`;
-        if (resetScroll) { resetScroll = false; window.scrollTo(0, 0); }
+        if (resetScroll) {
+          resetScroll = false;
+          if (!ui['current-data'].hidden) window.scrollTo(0, 0);
+        }
       }
       function accept(next, source) {
         if (!next || typeof next.instanceId !== 'string' || !next.instanceId || !Number.isFinite(next.generation) || !Array.isArray(next.records)) return false;
@@ -739,6 +828,221 @@
         problem = '请在 Orca 的「对话 TPS」面板中打开。';
         render();
       }
+    })();
+  </script>
+  <script>
+    (() => {
+      const bridge = window.orca?.plugin;
+      const element = id => document.getElementById('ladder-' + id);
+      const group = document.getElementById('leaderboard');
+      const lifetime = new AbortController();
+      const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const messages = {
+        unavailable: '连不上榜单服务器，请稍后重试。', github_unavailable: '榜单暂时无法完成 GitHub 登录。',
+        login_required: '用 GitHub 登录后即可提交。', banned: '这个 GitHub 账号已被封禁，无法提交。',
+        login_expired: '登录请求已过期，请重新登录。', login_denied: 'GitHub 授权已取消。',
+        browser_unavailable: '没有打开浏览器，请重新点击登录。', signed_in: '已登录。',
+        accepted: '已提交，成绩已上榜。', duplicate: '这个账号今天已经提交过了。',
+        locked: '今天的提交权限已锁定，北京时间明天零点恢复。',
+        new_day: '榜单日期已更新，请重新预览。', usage_changed: '用量已变化，请重新预览。',
+        usage_unready: '当日用量还未准备好，请稍后再试。', invalid: '提交数据不合规，请刷新再试。',
+        rate_limited: '请求太频繁，请稍后再试。', invalid_time: '请选择有效的定时时间。'
+      };
+      let model, preview, loginDraft, pendingLogin, retryLogin;
+      let busy = false, refreshing = false, preparing = false, edited = false, revision = 0, drawnRows = '', loginProblem = '';
+
+      async function request(action, payload = {}) {
+        try {
+          return await bridge.request('tps.leaderboard', { action, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
+        } catch {
+          return { code: 'unavailable' };
+        }
+      }
+
+      function renderRows(rows) {
+        const signature = JSON.stringify(rows);
+        if (signature === drawnRows) return;
+        drawnRows = signature;
+        const list = document.createDocumentFragment();
+        for (const row of rows) {
+          const item = document.createElement('li');
+          if (row.mine) item.classList.add('ladder-self');
+          const rank = document.createElement('span'), name = document.createElement('span');
+          const total = document.createElement('strong'), time = document.createElement('time');
+          rank.textContent = row.rank;
+          name.textContent = row.username;
+          name.title = row.username;
+          total.textContent = formatTokenMB(row.tokens);
+          time.textContent = clock.format(row.submittedAt);
+          time.dateTime = new Date(row.submittedAt).toISOString();
+          item.append(rank, name, total, time);
+          list.append(item);
+        }
+        element('rows').replaceChildren(list);
+      }
+
+      function render(code) {
+        const { board, local, schedule, lastAutomaticResult } = model ?? {};
+        const available = Array.isArray(board?.rows);
+        const signedIn = available && board.authenticated === true;
+        element('sign-in').hidden = signedIn || Boolean(pendingLogin);
+        element('login').disabled = busy || !loginDraft;
+        element('login-wait').hidden = !pendingLogin;
+        element('account').hidden = !signedIn;
+        element('status').textContent = messages[code] ?? messages[loginProblem] ?? (board?.banned ? messages.banned : messages[board?.code]) ?? (board?.lockedUntil ? messages.locked : '');
+        element('summary').textContent = board?.day ? board.day + ' · 北京时间' : '今日用量';
+        element('empty').hidden = !available || board.rows.length > 0;
+        if (available) renderRows(board.rows);
+        else {
+          element('rows').replaceChildren();
+          drawnRows = '';
+        }
+        if (!signedIn) { preview = undefined; return; }
+        element('mine').textContent = board.rank ? board.username + ' · 第 ' + board.rank + ' 名' : board.username;
+        if (board.submitted) {
+          element('usage').textContent = board.tokens == null ? '今日成绩已移除。' : '已提交 ' + formatTokenMB(board.tokens) + '（含缓存读写）';
+        } else {
+          element('usage').textContent = local?.ready ? '今日用量 ' + formatTokenMB(local.tokens) + '（含缓存读写）' : '正在汇总今日用量…';
+        }
+        const canSubmit = local?.ready && local.tokens > 0 && local.day === board.day && !board.banned && !board.lockedUntil && !board.submitted;
+        element('preview').hidden = !canSubmit || Boolean(preview);
+        element('confirmation').hidden = !canSubmit || !preview;
+        if (board.submitted && !board.banned && !board.lockedUntil && !code) element('status').textContent = '今日已提交。';
+        if (!edited) element('time').value = schedule ?? '';
+        const result = lastAutomaticResult?.day === board.day ? messages[lastAutomaticResult.code] : '';
+        element('schedule-note').textContent = (schedule ? '已开启 · ' + schedule + ' · Orca 运行时提交。' : '定时提交已关闭。') + (result ? ' ' + result : '');
+      }
+
+      async function refresh() {
+        if (group.hidden || busy || refreshing || lifetime.signal.aborted) return;
+        const requestedAt = revision;
+        refreshing = true;
+        try {
+          const result = await request('state');
+          if (revision !== requestedAt || lifetime.signal.aborted) return;
+          model = result;
+          if (preview && (model.local?.day !== preview.day || model.local?.tokens !== preview.tokens)) preview = undefined;
+          render(model.code);
+        } finally { refreshing = false; }
+      }
+
+      async function update(action, details) {
+        if (busy) return;
+        busy = true;
+        revision++;
+        try {
+          const result = await request(action, details);
+          if (action === 'logout') { edited = false; preview = undefined; }
+          if (result.local) model = result;
+          busy = false;
+          render(result.code);
+          if (action === 'logout') void prepareLogin();
+        } finally { busy = false; }
+      }
+
+      async function prepareLogin() {
+        if (loginDraft || preparing || lifetime.signal.aborted) return;
+        preparing = true;
+        const result = await request('login');
+        preparing = false;
+        if (lifetime.signal.aborted) return;
+        if (result.loginUrl) {
+          loginDraft = result;
+          element('login').disabled = busy;
+        } else render(result.code);
+      }
+
+      async function poll() {
+        if (!pendingLogin || lifetime.signal.aborted) return;
+        const attempt = pendingLogin;
+        const result = await request('poll');
+        if (attempt !== pendingLogin || lifetime.signal.aborted) return;
+        if (['pending', 'unavailable', 'rate_limited'].includes(result.code) && Date.now() < attempt.expiresAt) {
+          if (result.code !== 'pending') render(result.code);
+          retryLogin = setTimeout(poll, attempt.interval);
+          return;
+        }
+        revision++;
+        pendingLogin = undefined;
+        loginDraft = undefined;
+        if (result.local) model = result;
+        if (result.code === 'signed_in') {
+          render(result.code);
+        } else {
+          loginProblem = result.code === 'pending' ? 'login_expired' : result.code;
+          render(loginProblem);
+          await request('cancel');
+          void prepareLogin();
+        }
+      }
+
+      if (!bridge?.request) return;
+      group.addEventListener('tps-view-opened', () => { void prepareLogin(); void refresh(); });
+      element('update').addEventListener('click', refresh);
+      element('login').addEventListener('click', async () => {
+        if (busy || !loginDraft) return;
+        busy = true;
+        revision++;
+        loginProblem = '';
+        const attempt = { ...loginDraft, expiresAt: Date.now() + loginDraft.timeout };
+        pendingLogin = attempt;
+        render('');
+        try {
+          const result = await window.orca.shell.openExternal(attempt.loginUrl);
+          if (pendingLogin !== attempt) return;
+          if (result?.opened) {
+            retryLogin = setTimeout(poll, attempt.interval);
+            return;
+          }
+          pendingLogin = undefined;
+          loginProblem = 'browser_unavailable';
+          render(loginProblem);
+        } catch {
+          if (pendingLogin !== attempt) return;
+          pendingLogin = undefined;
+          loginProblem = 'browser_unavailable';
+          render(loginProblem);
+        } finally {
+          busy = false;
+          element('login').disabled = !loginDraft;
+        }
+      });
+      element('stop-login').addEventListener('click', async () => {
+        revision++;
+        pendingLogin = undefined;
+        loginDraft = undefined;
+        clearTimeout(retryLogin);
+        render('');
+        await request('cancel');
+        void prepareLogin();
+      });
+      element('logout').addEventListener('click', () => void update('logout'));
+      element('preview').addEventListener('click', () => {
+        if (!model?.local?.ready) return;
+        preview = model.local;
+        element('preview-text').textContent = '提交 ' + preview.day + ' 的 ' + formatTokenMB(preview.tokens) + '？';
+        render('');
+      });
+      element('cancel').addEventListener('click', () => { preview = undefined; render(''); });
+      element('submit').addEventListener('click', () => {
+        if (busy || !preview) return;
+        const { day, tokens } = preview;
+        preview = undefined;
+        void update('submit', { day, tokens });
+      });
+      element('time').addEventListener('input', () => { edited = true; });
+      element('schedule').addEventListener('submit', event => {
+        event.preventDefault();
+        edited = false;
+        void update('schedule', { time: element('time').value });
+      });
+      element('disable').addEventListener('click', () => { edited = false; void update('schedule', { time: '' }); });
+      const interval = setInterval(refresh, 1000);
+      window.addEventListener('pagehide', () => {
+        lifetime.abort();
+        clearTimeout(retryLogin);
+        clearInterval(interval);
+      }, { once: true });
     })();
   </script>
 </body>
