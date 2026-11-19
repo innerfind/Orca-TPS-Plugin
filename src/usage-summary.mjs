@@ -1,9 +1,16 @@
+import { promisify } from 'node:util';
+import { gzip, gunzip } from 'node:zlib';
 import { sourceMessage } from './locales.mjs';
 // Usage totals for the 当日/近一周/近一月 cards. Pure aggregation plus an incremental index: each source unit
 // (one session file, or one OpenCode session) is parsed once, its per-day counts are stored, and it is only
 // re-read when its stamp changes. Stored values are counts keyed by day, agent and model; no message text.
 
 export const UNIT_KEY_PREFIX = 'usage:unit:';
+const BUCKET_KEY_PREFIX = 'usage:b:';
+const BUCKET_COUNT = 64;
+const BUCKET_FORMAT = 'usage-bucket-v1';
+const compress = promisify(gzip);
+const decompress = promisify(gunzip);
 export const REMOTE_USAGE_PREFIX = 'remote:';
 export const USAGE_READ_BATCH = 16;
 export const BACKFILL_BYTES = 16 * 1024 * 1024;
@@ -185,6 +192,118 @@ function addCounters(target, cell) {
 
 const validUnit = value => value && typeof value === 'object' && typeof value.stamp === 'string' && value.days && typeof value.days === 'object';
 
+function bucketIndex(key) {
+  let hash = 2166136261;
+  for (let i = 0; i < key.length; i++) hash = Math.imul(hash ^ key.charCodeAt(i), 16777619);
+  return (hash >>> 0) % BUCKET_COUNT;
+}
+
+function createUsageStorage(storage, log) {
+  const buckets = new Map(), pending = new Set();
+
+  function getBucket(index) {
+    if (!buckets.has(index)) buckets.set(index, { key: null, units: new Map(), legacy: new Set(), changed: false });
+    return buckets.get(index);
+  }
+
+  async function load() {
+    const stored = [], legacy = [];
+    for (const key of await storage.keys()) {
+      if (!key.startsWith(BUCKET_KEY_PREFIX) && !key.startsWith(UNIT_KEY_PREFIX)) continue;
+      const value = await storage.get(key);
+      if (value?.format === BUCKET_FORMAT && Number.isInteger(value.bucket) && value.bucket >= 0 && value.bucket < BUCKET_COUNT) {
+        let entries = [];
+        try {
+          const decoded = await decompress(Buffer.from(value.data, 'base64'));
+          entries = Object.entries(JSON.parse(decoded.toString('utf8')));
+        } catch (error) {
+          log(sourceMessage('notice.usage-index-read-failed', error?.message ?? 'unknown'));
+        }
+        stored.push({ key, index: value.bucket, entries });
+      } else if (key.startsWith(UNIT_KEY_PREFIX) && validUnit(value)) {
+        legacy.push([key.slice(UNIT_KEY_PREFIX.length), value]);
+      }
+    }
+    for (const { key, index, entries } of stored) {
+      const bucket = getBucket(index);
+      bucket.key = key;
+      for (const [unitKey, unit] of entries) {
+        if (validUnit(unit) && bucketIndex(unitKey) === index) bucket.units.set(unitKey, unit);
+      }
+    }
+    for (const [key, unit] of legacy) {
+      const index = bucketIndex(key), bucket = getBucket(index);
+      bucket.legacy.add(key);
+      // A group that was saved before an interruption already has the newer copy.
+      if (!bucket.units.has(key)) {
+        bucket.units.set(key, unit);
+        bucket.changed = true;
+      }
+      pending.add(index);
+    }
+    return buckets.values();
+  }
+
+  function update(key, unit) {
+    const index = bucketIndex(key), bucket = getBucket(index);
+    if (unit) bucket.units.set(key, unit);
+    else bucket.units.delete(key);
+    bucket.changed = true;
+    pending.add(index);
+  }
+
+  async function flush(signal) {
+    let migrationWrites = BACKFILL_UNITS;
+    async function deleteLegacy(bucket, shouldDelete) {
+      for (const key of bucket.legacy) {
+        if (!shouldDelete(key)) continue;
+        if (!migrationWrites) return false;
+        signal?.throwIfAborted();
+        await storage.delete(UNIT_KEY_PREFIX + key);
+        bucket.legacy.delete(key);
+        migrationWrites--;
+      }
+      return true;
+    }
+
+    for (const index of pending) {
+      signal?.throwIfAborted();
+      const bucket = buckets.get(index);
+      try {
+        // Remove expired legacy copies before saving a group without them, so a restart cannot load them again.
+        if (!await deleteLegacy(bucket, key => !bucket.units.has(key))) continue;
+        if (bucket.changed) {
+          const legacyKey = bucket.legacy.values().next().value;
+          if (bucket.legacy.size && !migrationWrites) continue;
+          if (bucket.units.size) {
+            // Reuse a legacy slot for the first write, even when the store has no free keys.
+            const key = bucket.key ?? (legacyKey === undefined ? BUCKET_KEY_PREFIX + index : UNIT_KEY_PREFIX + legacyKey);
+            const data = await compress(JSON.stringify(Object.fromEntries(bucket.units)));
+            signal?.throwIfAborted();
+            await storage.set(key, { format: BUCKET_FORMAT, bucket: index, data: data.toString('base64') });
+            bucket.key = key;
+            if (legacyKey !== undefined) migrationWrites--;
+            if (key.startsWith(UNIT_KEY_PREFIX)) bucket.legacy.delete(key.slice(UNIT_KEY_PREFIX.length));
+          } else if (bucket.key) {
+            await storage.delete(bucket.key);
+          }
+          bucket.changed = false;
+        }
+        // Each legacy copy is removed only after its group has been written successfully.
+        if (!await deleteLegacy(bucket, () => true)) continue;
+        pending.delete(index);
+        if (!bucket.units.size) buckets.delete(index);
+      } catch (error) {
+        signal?.throwIfAborted();
+        log(sourceMessage('notice.usage-index-write-failed', error?.message ?? 'unknown'));
+      }
+    }
+    return !migrationWrites && pending.size > 0;
+  }
+
+  return { load, update, flush };
+}
+
 /**
  * Incremental index. `discover(cutoffMs)` returns unit descriptors:
  * { key, stamp, bytes, mtimeMs, read: async () => days }. Changed units are read newest first until the byte
@@ -199,7 +318,9 @@ export function createUsageIndex({
 }) {
   const units = new Map();
   const combined = Object.create(null), scores = new Map();
+  const usageStorage = createUsageStorage(storage, log);
   let loaded = null, progress = { done: 0, total: 0 }, updatedAt = null, summaryCache, summaryDay;
+  let refreshQueue = Promise.resolve();
   let readyLeaderboardDay = '', readyHistoryDay = '', moreBackfill = false;
 
   function adjust(unit, direction) {
@@ -235,22 +356,32 @@ export function createUsageIndex({
   }
 
   async function load() {
-    const keys = (await storage.keys()).filter(key => key.startsWith(UNIT_KEY_PREFIX));
-    for (const key of keys) {
-      const value = await storage.get(key);
-      if (validUnit(value)) setUnit(key.slice(UNIT_KEY_PREFIX.length), undefined, value);
+    for (const bucket of await usageStorage.load()) {
+      for (const [key, value] of bucket.units) setUnit(key, undefined, value);
     }
+    summaryCache = undefined;
+    summary();
+    return true;
   }
 
   // Persisted units are loaded once, before the first summary or refresh can read them.
   const ready = () => {
-    loaded ??= load().catch(error => { log(sourceMessage('notice.usage-index-read-failed', error?.message ?? 'unknown')); })
-      .then(() => { summaryCache = undefined; summary(); });
+    loaded ??= load().catch(error => {
+      log(sourceMessage('notice.usage-index-read-failed', error?.message ?? 'unknown'));
+      loaded = null;
+      return false;
+    });
     return loaded;
   };
 
-  async function refresh({ signal } = {}) {
-    await ready();
+  function refresh(options) {
+    const result = refreshQueue.then(() => refreshUsage(options));
+    refreshQueue = result.catch(() => {});
+    return result;
+  }
+
+  async function refreshUsage({ signal } = {}) {
+    if (!await ready()) return { pending: 0 };
     signal?.throwIfAborted();
     const refreshAt = now();
     const rankDay = leaderboardDay(refreshAt);
@@ -269,7 +400,7 @@ export function createUsageIndex({
       const remote = key.startsWith(REMOTE_USAGE_PREFIX);
       if (remote ? !coveredRemoteScopes.has(key.slice(0, key.lastIndexOf(':') + 1)) : !localComplete) continue;
       setUnit(key, units.get(key));
-      await storage.delete(UNIT_KEY_PREFIX + key).catch(() => {});
+      usageStorage.update(key);
     }
     const missingToday = (descriptor, current) => descriptor.mtimeMs >= rankStart &&
       (current?.leaderboardThrough ?? current?.leaderboardFrom) !== rankDay;
@@ -354,9 +485,10 @@ export function createUsageIndex({
       }
       signal?.throwIfAborted();
       setUnit(descriptor.key, units.get(descriptor.key), unit);
-      try { await storage.set(UNIT_KEY_PREFIX + descriptor.key, unit); }
-      catch (error) { log(sourceMessage('notice.usage-index-write-failed', error?.message ?? 'unknown')); }
+      usageStorage.update(descriptor.key, unit);
     }
+    const migrating = await usageStorage.flush(signal);
+    moreBackfill ||= migrating;
     progress = {
       done: descriptors.filter(descriptor => !needsRead(descriptor) || deferred(descriptor)).length,
       total: descriptors.length
