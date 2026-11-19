@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 import { createHash } from 'node:crypto';
 import { open, readdir, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
@@ -94,7 +95,7 @@ async function indexLog(filename) {
   const file = await open(filename, 'r');
   try {
     const metadata = await file.stat();
-    if (!metadata.isFile() || metadata.size > MAX_LOG_BYTES) throw new Error('Hermes 日志超出读取范围');
+    if (!metadata.isFile() || metadata.size > MAX_LOG_BYTES) throw new Error(sourceMessage('notice.hermes-log-size'));
     const key = identity(metadata), version = stamp(metadata), original = logCache.get(key);
     if (original?.version === version) {
       rememberLog(key, original);
@@ -106,7 +107,7 @@ async function indexLog(filename) {
     const records = [], chunk = Buffer.alloc(LOG_CHUNK_BYTES);
     while (offset < metadata.size) {
       const { bytesRead } = await file.read(chunk, 0, Math.min(chunk.length, metadata.size - offset), offset);
-      if (!bytesRead) throw new Error('Hermes 日志在读取时发生变化');
+      if (!bytesRead) throw new Error(sourceMessage('notice.hermes-log-changed'));
       const bytes = Buffer.concat([tail, chunk.subarray(0, bytesRead)]);
       const last = bytes.lastIndexOf(10);
       if (last >= 0) {
@@ -160,7 +161,7 @@ async function readSources(root, cutoffMs) {
 
 export async function hermesSources(roots, cutoffMs = 0, warnings) {
   const profiles = new Set();
-  const warn = () => warnings?.add('Hermes Agent：日志目录暂时无法读取。');
+  const warn = () => warnings?.add(sourceMessage('notice.hermes-folder-unavailable'));
   for (const root of roots.slice(0, 100)) {
     const home = await realpath(root).catch(() => null);
     if (!home) continue;
@@ -178,7 +179,7 @@ export async function hermesSources(roots, cutoffMs = 0, warnings) {
 }
 
 export async function readHermesRecords(source) {
-  if (source.bytes > MAX_LOG_BYTES) throw new Error('Hermes 日志超出读取范围');
+  if (source.bytes > MAX_LOG_BYTES) throw new Error(sourceMessage('notice.hermes-log-size'));
   const records = new Map();
   for (const file of source.files) {
     for (const record of await readLog(file)) records.set(record.id, record);
@@ -229,7 +230,7 @@ export async function readHermesSessions(roots, { sessionIds = [], worktree, com
         byId.set(sessionId, records);
       }
     } catch {
-      warnings.add('Hermes Agent：日志暂时无法读取，保留上次统计。');
+      warnings.add(sourceMessage('notice.hermes-log-unavailable'));
     }
   }
   return [...byId].map(([sessionId, records]) => {

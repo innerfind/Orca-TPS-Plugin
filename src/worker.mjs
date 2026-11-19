@@ -1,3 +1,4 @@
+import { createLocalePreferences } from './locales.mjs';
 import { createLiveSessionReader, discoverUsageUnits } from './data.mjs';
 import { readActiveConversation } from './active-conversation.mjs';
 import { createTpsController } from './controller.mjs';
@@ -12,16 +13,21 @@ const PANEL_VIEW_KEY = 'panel-view';
 const PANEL_VIEWS = new Set(['current-data', 'usage', 'leaderboard']);
 
 let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, stopLeaderboard, stopPanelView, running = false;
+let locales, localeRegistration;
 
 export default async function activate(orca) {
   await deactivate();
   running = true;
-  stopPanelView = registerPanelView(orca);
-  const remoteReader = remote = createRemoteChannelReader(orca);
+  const language = locales = await createLocalePreferences(orca.storage);
+  localeRegistration = orca.panels.handle('tps.locale', payload => payload?.code === undefined
+    ? language.response(true)
+    : language.select(payload.code, () => { void controller?.refreshLocale(); }));
+  stopPanelView = registerPanelView(orca, language.t);
+  const remoteReader = remote = createRemoteChannelReader(orca, { t: language.t });
   const localReader = local = createLiveSessionReader();
   const channelCache = cache = createChannelCache(orca.storage);
   controller = createTpsController(orca, {
-    cache: channelCache,
+    cache: channelCache, locales: language,
     pollMs: 250,
     readActive: () => readActiveConversation({ includeRemote: true, includeOpen: true }),
     readSession: (target, options) => target.executionHostId
@@ -30,7 +36,7 @@ export default async function activate(orca) {
     onOpenTargets: remoteReader.setTargets
   });
   await controller.start({ background: true });
-  const history = remoteUsage = createRemoteUsageReader(orca);
+  const history = remoteUsage = createRemoteUsageReader(orca, { t: language.t });
   usageAbort = new AbortController();
   usage = createUsageIndex({
     storage: orca.storage,
@@ -42,7 +48,7 @@ export default async function activate(orca) {
       ]);
       return { ...remoteUnits, descriptors: [...localUnits, ...remoteUnits.descriptors] };
     },
-    log: message => orca.log(message)
+    log: message => orca.log(language.notice(message))
   });
   void usage.ready();
   handler = orca.panels.handle('tps.summary', async () => {
@@ -61,11 +67,11 @@ export default async function activate(orca) {
         return index.leaderboardHistory();
       }
     });
-  } catch { orca.log('天梯榜地址无效，请检查配置。'); }
+  } catch { orca.log(language.t('notice.leaderboard-url-invalid')); }
   schedule(orca, FIRST_DELAY_MS);
 }
 
-function registerPanelView(orca) {
+function registerPanelView(orca, t) {
   const saved = orca.storage.get(PANEL_VIEW_KEY).catch(() => undefined);
   let selected, writing = Promise.resolve();
   const registration = orca.panels.handle('tps.panel-view', async payload => {
@@ -73,7 +79,7 @@ function registerPanelView(orca) {
     if (PANEL_VIEWS.has(view) && view !== selected) {
       selected = view;
       writing = writing.then(() => orca.storage.set(PANEL_VIEW_KEY, view)).catch(() => {
-        orca.log('未能保存面板分栏。');
+        orca.log(t('notice.panel-view-save-failed'));
       });
       await writing;
     }
@@ -99,7 +105,7 @@ async function tick(orca) {
   try {
     ({ pending } = await index.refresh({ signal }));
   } catch (error) {
-    if (!signal.aborted) orca.log(`统计刷新失败：${error?.message ?? 'unknown'}`);
+    if (!signal.aborted) orca.log(locales.t('notice.usage-refresh-failed', error?.message ?? 'unknown'));
   } finally {
     await history.finish();
   }
@@ -112,6 +118,10 @@ export async function deactivate() {
   timer = undefined;
   handler?.dispose?.();
   handler = undefined;
+  localeRegistration?.dispose?.();
+  localeRegistration = undefined;
+  const languageWrite = locales?.flush();
+  locales = undefined;
   const panelViewWrite = stopPanelView?.();
   stopPanelView = undefined;
   stopLeaderboard?.();
@@ -129,5 +139,5 @@ export async function deactivate() {
   local = undefined;
   const channelCache = cache;
   cache = undefined;
-  await Promise.all([remoteReader?.dispose(), history?.dispose(), channelCache?.flush(), panelViewWrite]);
+  await Promise.all([remoteReader?.dispose(), history?.dispose(), channelCache?.flush(), panelViewWrite, languageWrite]);
 }

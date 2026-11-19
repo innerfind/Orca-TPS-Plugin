@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 import { open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { createReadStream, watch } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
@@ -32,7 +33,7 @@ const pendingJsonl = new Map();
 const databaseRows = new Map();
 const antigravityWorkspaces = new Map();
 const skippedDirectories = new Set(['node_modules', '.git', 'subagents', 'cache', 'plugins', 'skills', 'auth', 'credentials']);
-const shortError = error => typeof error?.code === 'string' ? error.code : '读取失败';
+const shortError = error => typeof error?.code === 'string' ? error.code : sourceMessage('notice.read-failed');
 const identity = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const safeTitle = value => typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, 200) : '';
 const safeSegment = value => typeof value === 'string' && value.length > 0 && value.length <= 256 &&
@@ -74,9 +75,9 @@ async function discoverAntigravityTranscripts(root, sourceWarnings) {
   const files = [];
   let entries;
   try { entries = await readdir(root, { withFileTypes: true }); }
-  catch (error) { sourceWarnings.add(`antigravity：部分会话目录无法读取（${shortError(error)}）。`); return files; }
+  catch (error) { sourceWarnings.add(sourceMessage('notice.antigravity-partial-scan', shortError(error))); return files; }
   for (const entry of entries) {
-    if (files.length >= MAX_FILES) { sourceWarnings.add('antigravity：文件发现达到上限，仅扫描部分会话目录。'); break; }
+    if (files.length >= MAX_FILES) { sourceWarnings.add(sourceMessage('notice.antigravity-scan-limit')); break; }
     if (!entry.isDirectory() || !safeSegment(entry.name)) continue;
     const file = path.join(root, entry.name, '.system_generated', 'logs', 'transcript.jsonl');
     if ((await info(file))?.isFile()) files.push(file);
@@ -91,7 +92,7 @@ async function discover(provider, root, warnings, { maxAgeMs = 20_000 } = {}) {
     return cached.files;
   }
   if (root === path.parse(root).root || root === homedir()) {
-    warnings.add(`${provider}：请选择会话目录，不能扫描整个磁盘或用户主目录。`);
+    warnings.add(sourceMessage('notice.invalid-session-folder', provider));
     return [];
   }
   const rootStat = await info(root);
@@ -118,7 +119,7 @@ async function discover(provider, root, warnings, { maxAgeMs = 20_000 } = {}) {
       if (seen.has(canonical)) continue;
       seen.add(canonical);
       entries = await readdir(directory, { withFileTypes: true });
-    } catch (error) { sourceWarnings.add(`${provider}：部分会话目录无法读取（${shortError(error)}）。`); continue; }
+    } catch (error) { sourceWarnings.add(sourceMessage('notice.partial-session-scan', provider, shortError(error))); continue; }
     entries.sort((a, b) => b.name.localeCompare(a.name));
     const children = [];
     for (const entry of entries) {
@@ -135,7 +136,7 @@ async function discover(provider, root, warnings, { maxAgeMs = 20_000 } = {}) {
     queue.push(...children.reverse());
   }
   limited ||= queue.length > 0;
-  if (limited) sourceWarnings.add(`${provider}：文件发现达到上限，仅扫描部分会话目录。`);
+  if (limited) sourceWarnings.add(sourceMessage('notice.session-scan-limit', provider));
   const result = { at: Date.now(), files, warnings: [...sourceWarnings] };
   replayWarnings(warnings, result);
   discoveryCache.set(key, result); trimCache(discoveryCache);
@@ -199,7 +200,7 @@ async function readAntigravityTimings(transcriptPath, note) {
   if (!database?.isFile()) return new Map();
   let DatabaseSync;
   try { ({ DatabaseSync } = await import('node:sqlite')); }
-  catch { note('antigravity：当前运行时不支持 SQLite，耗时与模型暂不显示。'); return new Map(); }
+  catch { note(sourceMessage('notice.antigravity-no-sqlite')); return new Map(); }
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
@@ -215,7 +216,7 @@ async function readAntigravityTimings(transcriptPath, note) {
     }
     return antigravityNativeTimings(steps, generations);
   } catch (error) {
-    note(`antigravity：原生会话库无法读取（${shortError(error)}），耗时与模型暂不显示。`);
+    note(sourceMessage('notice.antigravity-database-unavailable', shortError(error)));
     return new Map();
   } finally { db?.close(); }
 }
@@ -280,7 +281,7 @@ async function advanceJsonl(key, candidate, budget, warnings, expectedSessionId,
   };
   if (cached?.stamp === stamp) { replayWarnings(warnings, cached); return matches(cached) ? cached.session : null; }
   const retained = () => {
-    warnings.add('本次读取达到 64 MiB 上限，较旧会话稍后读取；已有缓存仍可使用。');
+    warnings.add(sourceMessage('notice.read-size-limit'));
     replayWarnings(warnings, cached);
     return matches(cached) ? cached?.session ?? null : null;
   };
@@ -326,7 +327,7 @@ async function advanceJsonl(key, candidate, budget, warnings, expectedSessionId,
       }
     }
     if (startOffset > 0) {
-      sourceWarnings.push(`${candidate.provider}：较大会话只读取末尾 16 MiB，缺少开头的轮次不计入。`);
+      sourceWarnings.push(sourceMessage('notice.large-session', candidate.provider));
     }
     const native = candidate.provider === 'antigravity'
       ? await readAntigravityTimings(candidate.path, message => sourceWarnings.push(message))
@@ -404,7 +405,7 @@ async function attachClaudeSubagents(session, rawSessionId, budget, warnings) {
         if (sub.info.mtimeMs > maxUpdated) maxUpdated = sub.info.mtimeMs;
       }
     } catch (error) {
-      warnings.add(`claude：子代理记录读取失败（${shortError(error)}）。`);
+      warnings.add(sourceMessage('notice.claude-subagent-unavailable', shortError(error)));
     }
   }
   return { ...session, updatedAt: maxUpdated, records: recentRecords(allRecords) };
@@ -471,7 +472,7 @@ async function readDatabase(candidate, maxSessions, warnings, target) {
   if (cached?.stamp === stamp) { replayWarnings(warnings, cached); return cached.sessions; }
   let DatabaseSync;
   try { ({ DatabaseSync } = await import('node:sqlite')); }
-  catch { warnings.add('SQLite 不可用：当前 Orca 的 Node 运行时不能读取 OpenCode 数据库。'); return []; }
+  catch { warnings.add(sourceMessage('notice.opencode-no-sqlite')); return []; }
   let db;
   try {
     db = new DatabaseSync(candidate.path, { readOnly: true, enableExtensionLoading: false });
@@ -508,13 +509,13 @@ async function readDatabase(candidate, maxSessions, warnings, target) {
         seen.add(meta.id);
         const provider = v2 ? 'opencode2' : 'opencode';
         const { records, truncated } = readOpenCodeRecords(db, candidate, provider, messageTable, v2, messageColumns, meta.id);
-        if (truncated) sourceWarnings.add('OpenCode：较大会话仅读取最近 10000 条消息。');
+        if (truncated) sourceWarnings.add(sourceMessage('notice.opencode-message-limit'));
         sessions.push({ id: `${provider}:${meta.id}`, title: safeTitle(meta.title) || `${provider} · ${String(meta.id).slice(-20)}`,
           provider, path: candidate.path, updatedAt: Number.isFinite(meta.time_updated) ? meta.time_updated : candidate.info.mtimeMs,
           ...(typeof meta.directory === 'string' ? { cwd: meta.directory } : {}), records });
       }
     }
-    if (!sessions.length && !available.has('session') && !available.has('session_v2')) sourceWarnings.add('OpenCode：数据库没有受支持的会话表。');
+    if (!sessions.length && !available.has('session') && !available.has('session_v2')) sourceWarnings.add(sourceMessage('notice.opencode-schema-unavailable'));
     const result = { stamp, sessions, warnings: [...sourceWarnings] };
     replayWarnings(warnings, result);
     databaseCache.set(cacheKey, result); trimCache(databaseCache);
@@ -659,7 +660,7 @@ async function readSingleTargetSession(target, options = {}) {
   const warnings = new Set(), budget = { remaining: MAX_SCAN_BYTES };
   if (!target || !['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity', 'hermes'].includes(target.provider)
       || typeof target.sessionId !== 'string' || !target.sessionId || target.sessionId.length > 256) {
-    return { session: null, warnings: ['当前会话尚未识别，等待会话记录。'] };
+    return { session: null, warnings: [sourceMessage('notice.session-unidentified')] };
   }
   const isDatabase = target.provider === 'opencode' || target.provider === 'opencode2';
   const rootProvider = isDatabase ? 'opencode' : target.provider;
@@ -678,13 +679,13 @@ async function readSingleTargetSession(target, options = {}) {
         ? await attachClaudeSubagents(main, target.sessionId, budget, warnings)
         : main;
     } catch (error) {
-      warnings.add(`${target.provider}：会话读取失败（${shortError(error)}），未生成估算数据。`);
+      warnings.add(sourceMessage('notice.session-read-failed', target.provider, shortError(error)));
       return null;
     }
   };
   const finish = async session => {
     if (!session) {
-      warnings.add('当前会话的本机记录暂未找到，未显示其他会话的数据。');
+      warnings.add(sourceMessage('notice.local-session-not-found'));
       return { session: null, warnings: [...warnings] };
     }
     let records = session.records;
@@ -741,7 +742,7 @@ async function readSingleTargetSession(target, options = {}) {
       if (!candidate || (checkHeader && await headerSessionId(candidate, budget) !== target.sessionId)) return;
       const session = await read(candidate);
       if (session) { sessions.push(session); matchedPaths.push(candidate.path); }
-    } catch (error) { warnings.add(`${target.provider}：会话读取失败（${shortError(error)}），未生成估算数据。`); }
+    } catch (error) { warnings.add(sourceMessage('notice.session-read-failed', target.provider, shortError(error))); }
   };
   // Normal provider filenames carry the ID. Metadata lookup also supports renamed/mirrored logs.
   if (isDatabase) for (const file of files) await visit(file, false);
@@ -766,7 +767,7 @@ async function readChannelSessions(target, options = {}) {
   const wantedCwd = target.worktreePath ? normalizeComparePath(target.worktreePath, platform) : null;
   const explicitSessions = Array.isArray(target.sessions) ? target.sessions : [];
   if (!wantedCwd && !explicitSessions.length) {
-    return { session: null, warnings: ['当前频道尚未识别，等待会话记录。'] };
+    return { session: null, warnings: [sourceMessage('notice.channel-unidentified')] };
   }
 
   const warnings = new Set();
@@ -821,7 +822,7 @@ async function readChannelSessions(target, options = {}) {
           }
           if (session) preferBetterSession(bySessionId, session);
         } catch (error) {
-          warnings.add(`${provider}：会话读取失败（${shortError(error)}），未生成估算数据。`);
+          warnings.add(sourceMessage('notice.session-read-failed', provider, shortError(error)));
         }
       }
     }
@@ -837,7 +838,7 @@ async function readChannelSessions(target, options = {}) {
         const candidate = await candidateFor('antigravity', file);
         if (candidate) preferBetterSession(bySessionId, await readJsonl(candidate, budget, warnings, sessionId));
       } catch {
-        warnings.add('antigravity：部分会话的项目位置暂时无法读取。');
+        warnings.add(sourceMessage('notice.antigravity-location-unavailable'));
       }
     }
 
@@ -851,7 +852,7 @@ async function readChannelSessions(target, options = {}) {
           const dbSessions = await readDatabase(candidate, 100, warnings, { cwdFilter: wantedCwd, platform });
           for (const session of dbSessions) preferBetterSession(bySessionId, session);
         } catch (error) {
-          warnings.add(`opencode：会话读取失败（${shortError(error)}），未生成估算数据。`);
+          warnings.add(sourceMessage('notice.opencode-session-read-failed', shortError(error)));
         }
       }
     }
@@ -880,7 +881,7 @@ async function readChannelSessions(target, options = {}) {
   return {
     session: {
       id: `channel:${target.worktreeId || target.key || 'active'}`,
-      title: safeTitle(target.title) || '当前频道',
+      title: safeTitle(target.title) || sourceMessage('current-channel'),
       provider: 'channel',
       updatedAt: maxUpdatedAt || Date.now(),
       records: mergedRecords
@@ -1075,7 +1076,7 @@ async function addCodexStreamRecords(days, file, minDay, leaderboardDays) {
 async function addFileRecords(days, provider, file, minDay, isSubagent, leaderboardDays) {
   const metadata = await info(file);
   if (!metadata?.isFile()) return;
-  if (metadata.size > USAGE_MAX_FILE_BYTES) throw Object.assign(new Error('会话文件过大'), { code: 'too_large' });
+  if (metadata.size > USAGE_MAX_FILE_BYTES) throw Object.assign(new Error(sourceMessage('notice.session-file-too-large')), { code: 'too_large' });
   const text = await readFile(file, 'utf8');
   const complete = text.slice(0, text.lastIndexOf('\n') + 1);
   const parsed = parseJsonl(complete, provider, '', { isSubagent, limit: Infinity });
@@ -1250,7 +1251,7 @@ export async function scanSessions(options = {}) {
   candidates.sort((a, b) => b.info.mtimeMs - a.info.mtimeMs);
   const selected = [...candidates.filter(candidate => candidate.provider === 'opencode').slice(0, 10),
     ...candidates.filter(candidate => candidate.provider !== 'opencode').slice(0, maxSessions)];
-  if (candidates.length > selected.length) warnings.add(`仅读取最近 ${maxSessions} 个文件会话及最多 10 个数据库。`);
+  if (candidates.length > selected.length) warnings.add(sourceMessage('notice.scan-files-limit', maxSessions));
   const budget = { remaining: MAX_SCAN_BYTES }, sessions = [];
   for (const candidate of selected) {
     try {
@@ -1263,7 +1264,7 @@ export async function scanSessions(options = {}) {
         }
         if (session) sessions.push(session);
       }
-    } catch (error) { warnings.add(`${candidate.provider}：会话读取失败（${shortError(error)}），未生成估算数据。`); }
+    } catch (error) { warnings.add(sourceMessage('notice.session-read-failed', candidate.provider, shortError(error))); }
   }
   const unique = new Map();
   for (const session of sessions) {

@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 // Usage totals for the 当日/近一周/近一月 cards. Pure aggregation plus an incremental index: each source unit
 // (one session file, or one OpenCode session) is parsed once, its per-day counts are stored, and it is only
 // re-read when its stamp changes. Stored values are counts keyed by day, agent and model; no message text.
@@ -205,7 +206,7 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
 
   // Persisted units are loaded once, before the first summary or refresh can read them.
   const ready = () => {
-    loaded ??= load().catch(error => { log(`统计索引读取失败：${error?.message ?? 'unknown'}`); });
+    loaded ??= load().catch(error => { log(sourceMessage('notice.usage-index-read-failed', error?.message ?? 'unknown')); });
     return loaded;
   };
 
@@ -298,12 +299,12 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
           failed: true, failedStamp: descriptor.stamp, failures,
           retryAt: now() + Math.min(RETRY_MAX_MS, RETRY_MIN_MS * 2 ** (failures - 1))
         };
-        log(`统计读取失败（${error?.code ?? error?.message ?? 'unknown'}）`);
+        log(sourceMessage('notice.usage-read-failed', error?.code ?? error?.message ?? 'unknown'));
       }
       signal?.throwIfAborted();
       units.set(descriptor.key, unit);
       try { await storage.set(UNIT_KEY_PREFIX + descriptor.key, unit); }
-      catch (error) { log(`统计索引写入失败：${error?.message ?? 'unknown'}`); }
+      catch (error) { log(sourceMessage('notice.usage-index-write-failed', error?.message ?? 'unknown')); }
     }
     progress = {
       done: descriptors.filter(descriptor => !needsRead(descriptor) || deferred(descriptor)).length,

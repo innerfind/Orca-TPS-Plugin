@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { defaultRoots } from './data-paths.mjs';
@@ -54,12 +55,12 @@ function channelShortTitle(worktreePath) {
  */
 export function selectActiveConversation(state, options = {}) {
   const w = text(state?.activeWorktreeId);
-  if (!w) return empty('当前没有打开对话。');
+  if (!w) return empty(sourceMessage('notice.no-conversation'));
   const host = state.activeWorkspaceExecutionHostId ?? 'local';
   const remote = typeof host === 'string' && /^(?:runtime|ssh):[^\s]+$/.test(host);
-  if (host !== 'local' && (!remote || !options.includeRemote)) return empty('当前是远程对话，暂不读取远程统计。');
+  if (host !== 'local' && (!remote || !options.includeRemote)) return empty(sourceMessage('notice.remote-conversation'));
   const workspaceKey = text(state.activeWorkspaceKey);
-  if (workspaceKey && workspaceKey !== `worktree:${w}`) return empty('当前工作区状态尚未同步。');
+  if (workspaceKey && workspaceKey !== `worktree:${w}`) return empty(sourceMessage('notice.workspace-sync'));
 
   const pathApi = (options.platform || process.platform) === 'win32' ? path.win32 : path.posix;
   const sepIdx = w.indexOf('::');
@@ -145,7 +146,7 @@ export function selectActiveConversation(state, options = {}) {
   }
 
   if (!worktreePath && paneCwds.size === 1) worktreePath = [...paneCwds][0];
-  if (!remote && !worktreePath && !sessions.length) return empty('当前频道暂无可统计的对话。');
+  if (!remote && !worktreePath && !sessions.length) return empty(sourceMessage('notice.channel-empty'));
 
   const target = {
     key: JSON.stringify([options.userDataPath || '', options.profileId || '', w, worktreePath || '', ...(remote ? [host] : [])]),
@@ -162,7 +163,7 @@ export function selectActiveConversation(state, options = {}) {
 export function selectOpenChannels(state, byHost, options, active = selectActiveConversation(state, options).target) {
   const channels = new Map();
   if (active) channels.set(active.key, active);
-  const userTab = tab => (tab?.customTitle ?? tab?.title ?? tab?.label) !== 'TPS 远程统计';
+  const userTab = tab => (tab?.customTitle ?? tab?.title ?? tab?.label) !== sourceMessage('selector.remote-tab-title');
 
   for (const [host, workspace] of [['local', state], ...Object.entries(byHost ?? {})]) {
     if (!object(workspace) || (host !== 'local' && !/^(?:runtime|ssh):[^\s]+$/.test(host))) continue;
@@ -266,11 +267,11 @@ export async function readOrcaProfile(options = {}) {
 /** Reads one committed SQLite snapshot per poll, including live WAL; never writes Orca state. */
 export async function readActiveConversation(options = {}) {
   const profile = await readOrcaProfile(options);
-  if (!profile) return empty('无法识别 Orca 当前配置。');
+  if (!profile) return empty(sourceMessage('notice.profile-unavailable'));
   const { userDataPath, profileId, stateFile } = profile;
   let DatabaseSync;
   try { ({ DatabaseSync } = await import('node:sqlite')); }
-  catch { return empty('当前运行时不支持 SQLite，无法识别当前对话。'); }
+  catch { return empty(sourceMessage('notice.conversation-sqlite-unavailable')); }
   let db;
   try {
     db = new DatabaseSync(stateFile, { readOnly: true, enableExtensionLoading: false });
@@ -283,8 +284,8 @@ export async function readActiveConversation(options = {}) {
       Boolean(options.includeRemote), Boolean(options.includeOpen), revision]);
     if (cacheKey && lastSelection?.key === cacheKey) return copySelection(lastSelection.result);
     const state = workspaceDocument(db, 'workspaceSession');
-    if (!state) return empty('Orca 尚未保存当前工作区状态。');
-    if (!object(state)) return empty('Orca 当前工作区状态无效。');
+    if (!state) return empty(sourceMessage('notice.workspace-unsaved'));
+    if (!object(state)) return empty(sourceMessage('notice.workspace-invalid'));
     const selectionOptions = { ...options, userDataPath, profileId };
     const result = selectActiveConversation(state, selectionOptions);
     if (options.includeOpen) {
@@ -294,7 +295,7 @@ export async function readActiveConversation(options = {}) {
     }
     lastSelection = cacheKey ? { key: cacheKey, result: copySelection(result) } : null;
     return result;
-  } catch { return empty('暂时无法读取 Orca 当前对话。'); }
+  } catch { return empty(sourceMessage('notice.orca-read-failed')); }
   finally {
     try { if (db?.isTransaction) db.exec('COMMIT'); } catch { /* read-only snapshot */ }
     db?.close();

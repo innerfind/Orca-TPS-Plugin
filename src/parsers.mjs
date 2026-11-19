@@ -67,15 +67,21 @@ export function formatTokensPerSecond(tps) {
   return tps >= 1 ? String(Math.round(tps)) : tps.toFixed(1);
 }
 
-export function formatSpeedDisplay(entry) {
-  const formatted = formatTokensPerSecond(entry?.tokensPerSecond);
+export function formatSpeedDisplay(entry, locale) {
+  const tps = entry?.tokensPerSecond;
+  let formatted = formatTokensPerSecond(tps);
   if (!formatted) return '—';
+  if (locale) formatted = Number(formatted).toLocaleString(locale, { minimumFractionDigits: tps < 1 ? 1 : 0 });
   return entry?.isEstimatedSpeed ? `≈${formatted}` : formatted;
 }
 
-export function formatHitRatePercent(rate) {
+export function formatHitRatePercent(rate, locale) {
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate < 0 || rate > 1) return '—';
   const percent = Math.max(0, Math.min(100, rate * 100));
+  if (locale) {
+    const digits = percent >= 99.95 ? 0 : 1;
+    return rate.toLocaleString(locale, { style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits });
+  }
   return `${percent.toFixed(percent >= 99.95 ? 0 : 1)}%`;
 }
 

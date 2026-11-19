@@ -5,7 +5,10 @@ import path from 'node:path';
 import { createLiveSessionReader, discoverUsageUnits, normalizeComparePath } from './data.mjs';
 import { leaderboardDay, leaderboardDayStart, MAX_WINDOW_DAYS, USAGE_READ_BATCH } from './usage-summary.mjs';
 
-export const COLLECTOR_FILES = ['remote-collector.mjs', 'data.mjs', 'data-paths.mjs', 'parsers.mjs', 'usage-summary.mjs', 'hermes.mjs'];
+export const COLLECTOR_FILES = [
+  'remote-collector.mjs', 'data.mjs', 'data-paths.mjs', 'parsers.mjs',
+  'usage-summary.mjs', 'hermes.mjs', 'locales.mjs', 'locales/zh-CN.xml'
+];
 export const MAX_RESPONSE_BASE64 = 1024 * 1024;
 export const USAGE_PAGE_SIZE = 200;
 const PROVIDERS = new Set(['codex', 'claude', 'opencode', 'opencode2', 'pi', 'antigravity', 'hermes']);
@@ -130,12 +133,14 @@ async function bootstrap(token, filenames, maxResponseBase64) {
     if (collect || !files || filenames.some(name => typeof files[name] !== 'string')) throw new Error('bundle');
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'orca-tps-'));
     try {
+      await fs.mkdir(path.join(dir, 'locales'), { mode: 0o700 });
       for (const name of filenames) await fs.writeFile(path.join(dir, name), files[name], { flag: 'wx', mode: 0o600 });
       const collector = await import(pathToFileURL(path.join(dir, filenames[0])).href);
       collect = collector.collectRemoteChannel;
       usage = collector.createRemoteUsageScan();
     } finally {
       await Promise.allSettled(filenames.map(name => fs.unlink(path.join(dir, name))));
+      await fs.rmdir(path.join(dir, 'locales')).catch(() => {});
       await fs.rmdir(dir).catch(() => {});
     }
   }

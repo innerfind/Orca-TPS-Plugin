@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { leaderboardDay } from './usage-summary.mjs';
 import { validInstallationId } from './leaderboard-installation.mjs';
@@ -37,7 +38,7 @@ export function startLeaderboard(orca, {
   const base = new URL(endpoint);
   if (base.username || base.password || (base.protocol !== 'https:' &&
       (base.protocol !== 'http:' || !['localhost', '127.0.0.1', '[::1]'].includes(base.hostname)))) {
-    throw new Error('榜单服务需要 HTTPS。');
+    throw new Error(sourceMessage('notice.https-required'));
   }
   const lifetime = new AbortController();
   const host = orca.host;
