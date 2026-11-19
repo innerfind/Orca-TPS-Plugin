@@ -4,11 +4,11 @@ const standardMB = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, ma
 const preciseMB = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 });
 const formatMB = tokens => (tokens > 0 && tokens < 1_000_000 ? preciseMB : standardMB).format(tokens / 1_000_000);
 const date = new Intl.DateTimeFormat('zh-CN', {
-  timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
+  timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
 });
 const timeElement = value => `<time datetime="${new Date(value).toISOString()}">${date.format(value)} 北京时间</time>`;
 export const localTimes = `
-  const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   for (const time of document.querySelectorAll('time[datetime]')) time.textContent = clock.format(new Date(time.dateTime));
 `;
 
@@ -28,6 +28,8 @@ button,a.button{background:white;border:1px solid var(--accent);color:var(--acce
 input{border:1px solid var(--line);background:white;color:var(--ink);min-width:0}a:focus-visible,button:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #1782bf;outline-offset:3px}
 .scroll{overflow:auto}table{border-collapse:collapse;width:100%;min-width:330px}th,td{text-align:left;padding:.55rem .35rem;border-bottom:1px solid var(--line)}
 .number{text-align:right;font-variant-numeric:tabular-nums}.action{text-align:right}.muted{color:#4b6474}.notice{padding:.6rem .8rem;background:#e0eef6;border-left:4px solid var(--accent)}
+.account-table{min-width:510px}.ban-reason{max-width:18rem;overflow-wrap:anywhere}.ban-form{display:flex;justify-content:flex-end;align-items:center;gap:.4rem}
+.ban-form input{width:9rem}
 details{margin-top:.9rem}summary{color:var(--danger);cursor:pointer}.empty{padding:.8rem 0}
 </style><main>${content}</main><script src="/admin/local-time.js" defer></script></html>`;
 }
@@ -48,9 +50,17 @@ export function adminPage({ day, search, username, scores, accounts, audit, feed
   const scoreRows = scores.map(row => `<tr><td>${escape(row.username)}</td><td class="number">${formatMB(row.tokens)}</td>
     <td>${timeElement(row.submittedAt)}</td><td class="action"><form method="post" action="/admin/delete">${fields}
     <input type="hidden" name="account" value="${row.account}"><button class="danger" type="submit">删除</button></form></td></tr>`).join('');
-  const accountRows = accounts.map(row => `<tr><td>${escape(row.username)}</td><td>${row.banned ? '已封禁' : '正常'}</td>
-    <td class="action"><form method="post" action="/admin/ban">${fields}<input type="hidden" name="account" value="${row.id}">
-    <button ${row.banned ? '' : 'class="danger"'} type="submit" name="ban" value="${row.banned ? '0' : '1'}">${row.banned ? '解封' : '封禁'}</button></form></td></tr>`).join('');
+  const accountRows = accounts.map(row => {
+    const status = row.banned ? '已封禁' : row.lockedDay ? '当天禁传' : '正常';
+    const banReason = escape(row.reason ?? (row.banned ? '未记录' : ''));
+    const lockReason = row.lockedDay ? escape(row.lockReason ?? '未记录') : '';
+    const reason = [banReason, lockReason && (banReason ? '当天禁传：' + lockReason : lockReason)].filter(Boolean).join('<br>');
+    return `<tr><td>${escape(row.username)}</td><td>${status}</td>
+    <td class="ban-reason">${reason || '—'}</td>
+    <td class="action"><form class="ban-form" method="post" action="/admin/ban">${fields}<input type="hidden" name="account" value="${row.id}">
+    ${row.banned ? '' : '<input name="reason" required maxlength="200" aria-label="封禁原因" placeholder="填写封禁原因">'}
+    <button ${row.banned ? '' : 'class="danger"'} type="submit" name="ban" value="${row.banned ? '0' : '1'}">${row.banned ? '解封' : '封禁'}</button></form></td></tr>`;
+  }).join('');
   const auditRows = audit.map(row => `<tr><td>${timeElement(row.at)}</td><td>${escape(row.username)}</td>
     <td>${({ ban: '封禁', unban: '解封', delete: '删除成绩', clear: '清空榜单' })[row.action] ?? '操作'}</td>
     <td>${escape(row.target)}</td></tr>`).join('');
@@ -66,6 +76,6 @@ export function adminPage({ day, search, username, scores, accounts, audit, feed
     <button class="danger" type="submit" name="scope" value="day">清空这一天</button>
     <button class="danger" type="submit" name="scope" value="all">清空全部</button></form></details></section>
     <section><h2>GitHub 账号</h2>
-    ${accountRows ? `<div class="scroll"><table><thead><tr><th>账号</th><th>状态</th><th class="action">操作</th></tr></thead><tbody>${accountRows}</tbody></table></div>` : '<p class="empty muted">没有符合条件的账号。</p>'}</section>
+    ${accountRows ? `<div class="scroll"><table class="account-table"><thead><tr><th>账号</th><th>状态</th><th>限制原因</th><th class="action">操作</th></tr></thead><tbody>${accountRows}</tbody></table></div>` : '<p class="empty muted">没有符合条件的账号。</p>'}</section>
     <section><h2>最近管理操作</h2>${auditRows ? `<div class="scroll"><table><thead><tr><th>时间</th><th>管理员</th><th>操作</th><th>范围</th></tr></thead><tbody>${auditRows}</tbody></table></div>` : '<p class="empty muted">暂无操作记录。</p>'}</section>`);
 }

@@ -110,14 +110,14 @@ async function fixture(t, names = ['alice', 'bob']) {
 }
 
 test('everyone can view today’s ranking, while submissions require login and exclude banned accounts', async t => {
-  const api = await fixture(t);
+  const api = await fixture(t, ['alice', 'alice', 'bob']);
   const guest = await api.call('/api/today');
   assert.equal(guest.status, 200);
   assert.equal((await guest.json()).authenticated, false);
   assert.equal((await api.submit('', 300)).status, 401);
-  const alice = await api.login(), bob = await api.login();
-  const outcomes = await Promise.all([api.submit(alice, 300), api.submit(alice, 300)]);
-  assert.deepEqual(outcomes.map(result => result.status).sort(), [201, 409]);
+  const alice = await api.login(), aliceOtherDevice = await api.login(), bob = await api.login();
+  const outcomes = await Promise.all([api.submit(alice, 300), api.submit(aliceOtherDevice, 300)]);
+  assert.deepEqual(outcomes.map(result => result.status).sort(), [201, 429]);
   assert.equal((await api.submit(bob, 500)).status, 201);
   const board = await (await api.get(alice)).json();
   assert.deepEqual(board.rows.map(row => [row.username, row.tokens, row.rank]), [['bob', 500, 1], ['alice', 300, 2]]);
@@ -127,6 +127,11 @@ test('everyone can view today’s ranking, while submissions require login and e
   assert.equal(publicBoard.authenticated, false);
   assert.equal(publicBoard.submittedAt, undefined);
   assert.deepEqual(publicBoard.rows.map(row => row.username), ['bob', 'alice']);
+  api.advance(10_000);
+  assert.equal((await api.submit(aliceOtherDevice, 700)).status, 201);
+  const updated = await (await api.get(alice)).json();
+  assert.deepEqual(updated.rows.map(row => [row.username, row.tokens]), [['alice', 700], ['bob', 500]]);
+  assert.equal(updated.submittedAt, api.clock());
 
   assert.equal((await api.websiteLogin('visitor')).redirect, '/admin?feedback=forbidden');
   const admin = await api.websiteLogin('admin');
@@ -134,7 +139,11 @@ test('everyone can view today’s ranking, while submissions require login and e
   const dashboard = await api.call('/admin', { headers: { cookie: admin.cookie } });
   assert.match(await dashboard.text(), /alice/);
   assert.equal((await api.form('/admin/ban', admin.cookie, { account: '1', ban: '1' }, 'https://other.example')).status, 403);
-  assert.equal((await api.form('/admin/ban', admin.cookie, { account: '1', ban: '1' })).status, 303);
+  const noReason = await api.form('/admin/ban', admin.cookie, { account: '1', ban: '1' });
+  assert.match(noReason.headers.get('location'), /feedback=rejected/);
+  assert.equal((await api.form('/admin/ban', admin.cookie, { account: '1', ban: '1', reason: '异常上传 <需复核>' })).status, 303);
+  const notes = await api.call('/admin', { headers: { cookie: admin.cookie } });
+  assert.match(await notes.text(), /异常上传 &lt;需复核&gt;/);
   const bannedView = await api.get(alice);
   assert.equal(bannedView.status, 200);
   assert.equal((await bannedView.json()).banned, true);
@@ -162,15 +171,66 @@ test('the fifth error locks for the entire Beijing day, while retransmissions an
   api.advance(10 * 60 * 1000);
   const first = randomUUID();
   for (let index = 0; index < 8; index++) assert.equal((await api.submit(alice, -1, first)).status, 400);
-  for (let index = 0; index < 3; index++) assert.equal((await api.submit(alice, -1)).status, 400);
+  for (let index = 0; index < 3; index++) {
+    api.advance(5000);
+    assert.equal((await api.submit(alice, -1)).status, 400);
+  }
+  api.advance(5000);
   const locked = await api.submit(alice, -1);
   assert.equal(locked.status, 429);
   assert.equal((await locked.json()).lockedUntil, START + 86_400_000);
   assert.equal((await api.get(alice)).status, 200);
+  const admin = await api.websiteLogin('admin');
+  const lockPage = await api.call('/admin?day=2026-11-17', { headers: { cookie: admin.cookie } });
+  assert.match(await lockPage.text(), /<td>当天禁传<\/td>\s*<td class="ban-reason">10 分钟内提交错误累计 5 次/);
   api.advance(3600_000);
   assert.equal((await api.submit(alice, 25)).status, 429);
   api.advance(START + 86_400_000 - api.clock());
   assert.equal((await api.submit(alice, 25)).status, 201);
+});
+
+test('only the fourth consecutive interval under five seconds bans, and records the reason', async t => {
+  const api = await fixture(t);
+  const alice = await api.login();
+  const first = randomUUID();
+  assert.equal((await api.submit(alice, 100, first)).status, 201);
+  for (let index = 0; index < 5; index++) assert.equal((await api.submit(alice, 100, first)).status, 201);
+  for (let index = 0; index < 3; index++) {
+    api.advance(1000);
+    assert.equal((await api.submit(alice, 100)).status, 429);
+  }
+  api.advance(5000);
+  assert.equal((await api.submit(alice, 100)).status, 429);
+  api.advance(1000);
+  assert.equal((await api.submit(alice, 100)).status, 429);
+  api.advance(1000);
+  assert.equal((await api.submit(alice, 200)).status, 201);
+  api.advance(1000);
+  assert.equal((await api.submit(alice, 300)).status, 429);
+  api.advance(1000);
+  assert.equal((await api.submit(alice, 300)).status, 403);
+  const board = await (await api.get(alice)).json();
+  assert.equal(board.banned, true);
+  assert.equal(board.tokens, 200);
+  const admin = await api.websiteLogin('admin');
+  const page = await api.call('/admin', { headers: { cookie: admin.cookie } });
+  assert.match(await page.text(), /连续 4 次上传间隔不足 5 秒/);
+  await api.form('/admin/ban', admin.cookie, { account: '1', ban: '0' });
+  api.advance(8000);
+  assert.equal((await api.submit(alice, 300)).status, 201);
+});
+
+test('the ten-second upload limit carries across Beijing midnight', async t => {
+  const api = await fixture(t);
+  const alice = await api.login();
+  api.advance(START + 86_400_000 - 1000 - api.clock());
+  assert.equal((await api.submit(alice, 100)).status, 201);
+  api.advance(1000);
+  const limited = await api.submit(alice, 200);
+  assert.equal(limited.status, 429);
+  assert.equal((await limited.json()).code, 'too_soon');
+  api.advance(9000);
+  assert.equal((await api.submit(alice, 200)).status, 201);
 });
 
 test('reopening the database keeps the score and the daily lock', async t => {
@@ -179,9 +239,10 @@ test('reopening the database keeps the score and the daily lock', async t => {
   const filename = path.join(dir, 'leaderboard.sqlite');
   const store = openLeaderboardStore(filename);
   store.upsertAccount({ id: 1, login: 'alice' });
-  const submit = tokens => store.submit(1, { day: TODAY, tokens, requestId: randomUUID(), fingerprint: 'test' }, START, 5);
+  let time = START;
+  const submit = tokens => store.submit(1, { day: TODAY, tokens, requestId: randomUUID(), fingerprint: 'test' }, time, 5);
   assert.equal(submit(5), 'accepted');
-  for (let index = 0; index < 5; index++) submit(5);
+  for (let index = 0; index < 5; index++) { time += 5000; submit(-1); }
   store.close();
   const reopened = openLeaderboardStore(filename);
   try {
@@ -190,7 +251,7 @@ test('reopening the database keeps the score and the daily lock', async t => {
   } finally { reopened.close(); }
 });
 
-test('the plugin worker signs in through the browser, keeps its session after restart, and submits once', async t => {
+test('the plugin keeps its signed-in upload settings and stops uploading when switched off', async t => {
   const api = await fixture(t);
   const storage = new Map(), secrets = new Map(), handlers = new Map();
   const orca = {
@@ -213,6 +274,8 @@ test('the plugin worker signs in through the browser, keeps its session after re
   const run = (action, fields = {}) => handlers.get('tps.leaderboard')({ action, ...fields });
   const initial = await run('state');
   assert.equal(initial.board.authenticated, false);
+  assert.deepEqual(initial.upload, { enabled: false, interval: 60 });
+  assert.equal((await run('upload', { enabled: true, interval: 10 })).code, 'login_required');
   assert.equal((await run('submit', { day: TODAY, tokens })).code, 'login_required');
   assert.deepEqual(JSON.parse(JSON.stringify(initial)), initial);
   const login = await run('login');
@@ -231,22 +294,100 @@ test('the plugin worker signs in through the browser, keeps its session after re
   assert.equal(submitted.code, 'accepted');
   assert.equal(submitted.board.rows[0].tokens, 700);
   const viewerToken = secrets.get('leaderboard-session');
-  const clock = new Date(api.clock());
-  const localTime = [clock.getHours(), clock.getMinutes()].map(value => String(value).padStart(2, '0')).join(':');
-  await run('schedule', { time: localTime });
+  assert.equal((await run('submit', { day: TODAY, tokens: 700 })).code, 'too_soon');
+  assert.equal((await run('upload', { enabled: true, interval: 9 })).code, 'invalid_interval');
+  api.advance(10_000);
+  tokens = 800;
+  assert.deepEqual((await run('upload', { enabled: true, interval: 10 })).upload, { enabled: true, interval: 10 });
   for (let tries = 0; tries < 25 && !(await run('state')).lastAutomaticResult; tries++) await delay(10);
-  assert.equal((await run('state')).lastAutomaticResult.code, 'duplicate');
+  assert.equal((await run('state')).board.tokens, 800);
+  tokens = 850;
+  api.advance(9999);
+  assert.equal((await run('state')).board.tokens, 800);
+  api.advance(1);
+  for (let tries = 0; tries < 40 && (await run('state')).board.tokens !== 850; tries++) await delay(50);
+  assert.equal((await run('state')).board.tokens, 850);
+  stop();
+  stop = launch();
+  assert.deepEqual((await run('state')).upload, { enabled: true, interval: 10 });
+  const off = await run('upload', { enabled: false, interval: 10 });
+  assert.deepEqual(off.upload, { enabled: false, interval: 10 });
+  api.advance(20_000);
+  tokens = 900;
+  await delay(1100);
+  assert.equal((await run('state')).board.tokens, 850);
   assert.equal((await run('logout')).board.authenticated, false);
   assert.equal(secrets.size, 0);
   assert.equal((await api.get(viewerToken, '/api/today/status')).status, 401);
 
   await api.authorizePlugin((await run('login')).loginUrl, 'bob');
   assert.equal((await run('poll')).board.username, 'bob');
-  await run('schedule', { time: localTime });
-  for (let tries = 0; tries < 25 && !(await run('state')).lastAutomaticResult; tries++) await delay(10);
-  const automatic = await run('state');
-  assert.equal(automatic.lastAutomaticResult.code, 'accepted');
-  assert.equal(automatic.board.rows.find(row => row.mine).tokens, 700);
+  assert.equal((await run('state')).upload.enabled, false);
+});
+
+test('the plugin shows the ranking while local usage is still loading', { timeout: 3000 }, async t => {
+  let handle, finishUsage;
+  const usage = new Promise(resolve => { finishUsage = resolve; });
+  const stop = startLeaderboard({
+    storage: { get: async () => undefined, set: async () => {} },
+    panels: { handle: (_, callback) => { handle = callback; return { dispose() {} }; } }
+  }, {
+    now: () => new Date(START),
+    readUsage: () => usage,
+    fetcher: async () => Response.json({ day: TODAY, authenticated: false, rows: [] })
+  });
+  t.after(() => { finishUsage(); stop(); });
+  const personal = handle({ action: 'usage' });
+  assert.deepEqual((await handle({ action: 'state' })).board.rows, []);
+  const local = { day: TODAY, ready: true, tokens: 123 };
+  finishUsage(local);
+  assert.deepEqual(await personal, { local });
+});
+
+test('the plugin restores public rankings without the network and expires them at Beijing midnight', async t => {
+  const stored = new Map();
+  const row = { rank: 1, username: 'alice', tokens: 5, submittedAt: START };
+  const endpoint = 'http://127.0.0.1:6789';
+  let clock = START, offline = false, fetches = 0, writes = 0, handle;
+  const orca = {
+    storage: {
+      get: async key => stored.get(key),
+      set: async (key, value) => { writes++; stored.set(key, value); }
+    },
+    panels: { handle: (_, callback) => { handle = callback; return { dispose() {} }; } }
+  };
+  const launch = address => startLeaderboard(orca, {
+    endpoint: address, now: () => new Date(clock), readUsage: async () => undefined,
+    fetcher: async () => {
+      fetches++;
+      if (offline) throw new Error('offline');
+      return Response.json({ day: TODAY, authenticated: true, banned: true, rank: 1, rows: [{ ...row, mine: true }] });
+    }
+  });
+  let stop = launch(endpoint);
+  t.after(() => stop());
+  const run = action => handle({ action });
+  assert.deepEqual(await run('cache'), { ranking: null });
+  assert.equal(fetches, 0);
+  assert.equal((await run('state')).board.rows[0].mine, true);
+  assert.equal((await run('state')).board.banned, true);
+  assert.equal(writes, 1);
+  assert.deepEqual([...stored.values()], [{ origin: endpoint, day: TODAY, rows: [row], updatedAt: START }]);
+  stop();
+
+  offline = true;
+  stop = launch(endpoint);
+  assert.deepEqual(await run('cache'), { ranking: { day: TODAY, rows: [row], updatedAt: START } });
+  assert.equal(fetches, 2);
+  assert.deepEqual((await run('state')).board, { code: 'unavailable' });
+  assert.equal((await run('cache')).ranking.rows.length, 1);
+  clock = START + 86_400_000;
+  assert.deepEqual(await run('cache'), { ranking: null });
+  clock = START;
+  stop();
+
+  stop = launch('http://127.0.0.1:6790');
+  assert.deepEqual(await run('cache'), { ranking: null });
 });
 
 test('usage discovery separates requests on either side of Beijing midnight from one source file', async t => {

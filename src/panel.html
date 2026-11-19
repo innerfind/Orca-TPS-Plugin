@@ -100,7 +100,8 @@
     .ladder-rows .ladder-self { color: var(--blue); }
     .ladder-rows span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .ladder-rows time { grid-column: 2 / 4; color: var(--muted); font-size: 10px; }
-    .ladder-time { max-width: 9rem; padding: 4px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface); font: inherit; }
+    .ladder-interval { width: 5.5rem; padding: 4px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface); font: inherit; }
+    .ladder-switch { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
     .refresh.is-busy svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .messages:empty { display: none; }
@@ -227,6 +228,7 @@
     <section class="panel-view" id="leaderboard" role="tabpanel" aria-labelledby="tab-leaderboard" tabindex="0" hidden>
       <p class="ladder-date" id="ladder-summary">今日用量</p>
         <p class="ladder-status" id="ladder-status" role="status"></p>
+        <p class="ladder-note" id="ladder-freshness" role="status" hidden></p>
         <div id="ladder-sign-in" class="ladder-actions" hidden>
           <button class="refresh" id="ladder-login" type="button" disabled>用 GitHub 登录</button>
           <span class="ladder-note">登录后可以提交今日用量。</span>
@@ -244,24 +246,21 @@
           </div>
           <p class="ladder-mine" id="ladder-mine"></p>
           <p class="ladder-note" id="ladder-usage"></p>
-          <button class="refresh" id="ladder-preview" type="button">提交今日用量</button>
+          <button class="refresh" id="ladder-preview" type="button">上传今日用量</button>
           <div class="ladder-preview" id="ladder-confirmation" hidden>
-            <p id="ladder-preview-text"></p><p class="ladder-note">每天限交一次，提交后无法修改或撤回。</p>
+            <p id="ladder-preview-text"></p><p class="ladder-note">上传会更新当天的成绩。</p>
             <div class="ladder-actions">
-              <button class="refresh ladder-primary" id="ladder-submit" type="button">确认提交</button>
+              <button class="refresh ladder-primary" id="ladder-submit" type="button">确认上传</button>
               <button class="refresh" id="ladder-cancel" type="button">取消</button>
             </div>
           </div>
-          <details>
-            <summary>定时提交</summary>
-            <form class="ladder-actions" id="ladder-schedule">
-              <label for="ladder-time">本地时间</label>
-              <input class="ladder-time" id="ladder-time" type="time" required>
-              <button class="refresh" type="submit">保存定时</button>
-              <button class="refresh" id="ladder-disable" type="button">关闭定时</button>
-            </form>
-            <p class="ladder-note" id="ladder-schedule-note"></p>
-          </details>
+          <form class="ladder-actions" id="ladder-upload-form">
+            <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch">自动上传</label>
+            <label for="ladder-upload-interval">间隔（秒）</label>
+            <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" required>
+            <button class="refresh" type="submit">保存间隔</button>
+          </form>
+          <p class="ladder-note" id="ladder-upload-note"></p>
         </div>
         <ol class="ladder-rows" id="ladder-rows" aria-label="今日用量名次"></ol>
         <p class="ladder-note" id="ladder-empty" hidden>今日还没有人提交。</p>
@@ -836,20 +835,24 @@
       const element = id => document.getElementById('ladder-' + id);
       const group = document.getElementById('leaderboard');
       const lifetime = new AbortController();
-      const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+      const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const today = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const messages = {
         unavailable: '连不上榜单服务器，请稍后重试。', github_unavailable: '榜单暂时无法完成 GitHub 登录。',
         login_required: '用 GitHub 登录后即可提交。', banned: '这个 GitHub 账号已被封禁，无法提交。',
         login_expired: '登录请求已过期，请重新登录。', login_denied: 'GitHub 授权已取消。',
         browser_unavailable: '没有打开浏览器，请重新点击登录。', signed_in: '已登录。',
-        accepted: '已提交，成绩已上榜。', duplicate: '这个账号今天已经提交过了。',
+        accepted: '已上传，成绩已更新。', duplicate: '这次上传已经处理。',
+        removed: '今日成绩已由管理员移除。', too_soon: '上次上传后满 10 秒即可更新。',
+        upload_in_progress: '正在上传，请稍候。',
         locked: '今天的提交权限已锁定，北京时间明天零点恢复。',
         new_day: '榜单日期已更新，请重新预览。', usage_changed: '用量已变化，请重新预览。',
         usage_unready: '当日用量还未准备好，请稍后再试。', invalid: '提交数据不合规，请刷新再试。',
-        rate_limited: '请求太频繁，请稍后再试。', invalid_time: '请选择有效的定时时间。'
+        rate_limited: '请求太频繁，请稍后再试。', invalid_interval: '上传间隔至少为 10 秒。'
       };
-      let model, preview, loginDraft, pendingLogin, retryLogin;
-      let busy = false, refreshing = false, preparing = false, edited = false, revision = 0, drawnRows = '', loginProblem = '';
+      let model, local, cachedRanking, preview, loginDraft, pendingLogin, retryLogin;
+      let busy = false, savingUpload = false, refreshing = false, readingUsage = false, preparing = false, edited = false;
+      let revision = 0, drawnRows = '', renderedDay = '', loginProblem = '', messageCode = '';
 
       async function request(action, payload = {}) {
         try {
@@ -881,63 +884,118 @@
         element('rows').replaceChildren(list);
       }
 
-      function render(code) {
-        const { board, local, schedule, lastAutomaticResult } = model ?? {};
-        const available = Array.isArray(board?.rows);
-        const signedIn = available && board.authenticated === true;
+      function render(code = messageCode) {
+        messageCode = code;
+        renderedDay = today();
+        const { board = {}, upload, lastAutomaticResult } = model ?? {};
+        const live = board.day === renderedDay && Array.isArray(board.rows);
+        const ranking = live ? board : cachedRanking?.day === renderedDay ? cachedRanking : null;
+        const freshness = element('freshness');
+        const notice = ranking && !live ? '上次更新 ' + clock.format(ranking.updatedAt)
+          : !ranking && !board.code ? '正在加载榜单…' : '';
+        if (freshness.textContent !== notice) freshness.textContent = notice;
+        freshness.hidden = !notice;
+        const signedIn = model?.signedIn === true || board.authenticated === true;
         element('sign-in').hidden = signedIn || Boolean(pendingLogin);
         element('login').disabled = busy || !loginDraft;
         element('login-wait').hidden = !pendingLogin;
         element('account').hidden = !signedIn;
         element('status').textContent = messages[code] ?? messages[loginProblem] ?? (board?.banned ? messages.banned : messages[board?.code]) ?? (board?.lockedUntil ? messages.locked : '');
-        element('summary').textContent = board?.day ? board.day + ' · 北京时间' : '今日用量';
-        element('empty').hidden = !available || board.rows.length > 0;
-        if (available) renderRows(board.rows);
-        else {
-          element('rows').replaceChildren();
-          drawnRows = '';
-        }
+        element('summary').textContent = renderedDay + ' · 北京时间';
+        element('empty').hidden = !ranking || ranking.rows.length > 0;
+        renderRows(ranking?.rows ?? []);
         if (!signedIn) { preview = undefined; return; }
-        element('mine').textContent = board.rank ? board.username + ' · 第 ' + board.rank + ' 名' : board.username;
-        if (board.submitted) {
-          element('usage').textContent = board.tokens == null ? '今日成绩已移除。' : '已提交 ' + formatTokenMB(board.tokens) + '（含缓存读写）';
+        element('mine').textContent = live ? (board.rank ? board.username + ' · 第 ' + board.rank + ' 名' : (board.username ?? '')) : '';
+        const usageReady = local?.ready && local.day === renderedDay;
+        if (live && board.submitted) {
+          element('usage').textContent = board.tokens == null ? '今日成绩已移除。' : '榜单用量 ' + formatTokenMB(board.tokens) + '（含缓存读写）';
         } else {
-          element('usage').textContent = local?.ready ? '今日用量 ' + formatTokenMB(local.tokens) + '（含缓存读写）' : '正在汇总今日用量…';
+          element('usage').textContent = usageReady ? '今日用量 ' + formatTokenMB(local.tokens) + '（含缓存读写）' : '正在汇总今日用量…';
         }
-        const canSubmit = local?.ready && local.tokens > 0 && local.day === board.day && !board.banned && !board.lockedUntil && !board.submitted;
+        const canSubmit = live && board.authenticated === true && usageReady && local.tokens > 0 && !board.banned && !board.lockedUntil &&
+          !(board.submitted && board.tokens === null);
         element('preview').hidden = !canSubmit || Boolean(preview);
+        element('preview').disabled = Boolean(board.nextUploadAt);
         element('confirmation').hidden = !canSubmit || !preview;
-        if (board.submitted && !board.banned && !board.lockedUntil && !code) element('status').textContent = '今日已提交。';
-        if (!edited) element('time').value = schedule ?? '';
+        element('submit').disabled = Boolean(board.nextUploadAt);
+        if (board.nextUploadAt && canSubmit && !code) element('status').textContent = messages.too_soon;
+        const enabled = upload?.enabled === true;
+        element('upload-enabled').checked = enabled;
+        element('upload-enabled').disabled = savingUpload || (!enabled && (!live || board.authenticated !== true || board.banned));
+        if (!edited) element('upload-interval').value = upload?.interval ?? 60;
         const result = lastAutomaticResult?.day === board.day ? messages[lastAutomaticResult.code] : '';
-        element('schedule-note').textContent = (schedule ? '已开启 · ' + schedule + ' · Orca 运行时提交。' : '定时提交已关闭。') + (result ? ' ' + result : '');
+        element('upload-note').textContent = enabled ? `Orca 运行时每 ${upload.interval} 秒上传。${result ? ' ' + result : ''}` : '自动上传已关闭。';
+      }
+
+      async function showCache() {
+        if (cachedRanking?.day === today()) return;
+        const { ranking } = await request('cache');
+        if (lifetime.signal.aborted || !ranking || ranking.day !== today()) return;
+        if (cachedRanking?.day === ranking.day && cachedRanking.updatedAt >= ranking.updatedAt) return;
+        cachedRanking = ranking;
+        render();
+      }
+
+      async function refreshUsage() {
+        if (readingUsage || group.hidden || !model?.signedIn || lifetime.signal.aborted) return;
+        readingUsage = true;
+        try {
+          const result = await request('usage');
+          if (lifetime.signal.aborted || !result.local) return;
+          local = result.local;
+          if (preview && (local.day !== preview.day || local.tokens !== preview.tokens)) preview = undefined;
+          if (!group.hidden) render();
+        } finally { readingUsage = false; }
+      }
+
+      function showState(result) {
+        model = result.board ? result : { ...model, board: { code: result.code } };
+        const { board, updatedAt } = model;
+        if (Number.isSafeInteger(updatedAt) && board.day === today() && Array.isArray(board.rows)) {
+          const rows = board.rows.map(({ rank, username, tokens, submittedAt }) => ({ rank, username, tokens, submittedAt }));
+          cachedRanking = { day: board.day, rows, updatedAt };
+        }
+        render(result.code ?? '');
+        void refreshUsage();
       }
 
       async function refresh() {
-        if (group.hidden || busy || refreshing || lifetime.signal.aborted) return;
+        if (group.hidden || lifetime.signal.aborted) return;
+        if (renderedDay !== today()) render('');
+        if (busy || savingUpload || refreshing) return;
         const requestedAt = revision;
         refreshing = true;
         try {
           const result = await request('state');
           if (revision !== requestedAt || lifetime.signal.aborted) return;
-          model = result;
-          if (preview && (model.local?.day !== preview.day || model.local?.tokens !== preview.tokens)) preview = undefined;
-          render(model.code);
+          showState(result);
         } finally { refreshing = false; }
       }
 
       async function update(action, details) {
         if (busy) return;
         busy = true;
-        revision++;
+        const requestedAt = ++revision;
         try {
           const result = await request(action, details);
           if (action === 'logout') { edited = false; preview = undefined; }
-          if (result.local) model = result;
           busy = false;
-          render(result.code);
+          if (result.board && revision === requestedAt) showState(result);
+          else render(result.code);
           if (action === 'logout') void prepareLogin();
         } finally { busy = false; }
+      }
+
+      async function updateUpload(enabled, interval) {
+        if (savingUpload) return;
+        savingUpload = true;
+        revision++;
+        try {
+          const result = await request('upload', { enabled, interval });
+          if (result.upload) model = { ...model, upload: result.upload, lastAutomaticResult: result.lastAutomaticResult };
+          savingUpload = false;
+          render(result.code);
+        } finally { savingUpload = false; }
       }
 
       async function prepareLogin() {
@@ -965,9 +1023,8 @@
         revision++;
         pendingLogin = undefined;
         loginDraft = undefined;
-        if (result.local) model = result;
         if (result.code === 'signed_in') {
-          render(result.code);
+          showState(result);
         } else {
           loginProblem = result.code === 'pending' ? 'login_expired' : result.code;
           render(loginProblem);
@@ -977,7 +1034,12 @@
       }
 
       if (!bridge?.request) return;
-      group.addEventListener('tps-view-opened', () => { void prepareLogin(); void refresh(); });
+      group.addEventListener('tps-view-opened', () => {
+        render('');
+        void showCache();
+        void refresh();
+        void prepareLogin();
+      });
       element('update').addEventListener('click', refresh);
       element('login').addEventListener('click', async () => {
         if (busy || !loginDraft) return;
@@ -1018,9 +1080,9 @@
       });
       element('logout').addEventListener('click', () => void update('logout'));
       element('preview').addEventListener('click', () => {
-        if (!model?.local?.ready) return;
-        preview = model.local;
-        element('preview-text').textContent = '提交 ' + preview.day + ' 的 ' + formatTokenMB(preview.tokens) + '？';
+        if (!local?.ready || local.day !== today()) return;
+        preview = local;
+        element('preview-text').textContent = '上传 ' + preview.day + ' 的 ' + formatTokenMB(preview.tokens) + '？';
         render('');
       });
       element('cancel').addEventListener('click', () => { preview = undefined; render(''); });
@@ -1030,13 +1092,23 @@
         preview = undefined;
         void update('submit', { day, tokens });
       });
-      element('time').addEventListener('input', () => { edited = true; });
-      element('schedule').addEventListener('submit', event => {
+      const uploadInterval = element('upload-interval');
+      const uploadEnabled = element('upload-enabled');
+      uploadInterval.addEventListener('input', () => { edited = true; });
+      uploadEnabled.addEventListener('change', () => {
+        if (uploadEnabled.checked && !uploadInterval.reportValidity()) {
+          uploadEnabled.checked = false;
+          return;
+        }
+        const seconds = uploadInterval.validity.valid ? uploadInterval.valueAsNumber : model?.upload?.interval ?? 60;
+        edited = false;
+        void updateUpload(uploadEnabled.checked, seconds);
+      });
+      element('upload-form').addEventListener('submit', event => {
         event.preventDefault();
         edited = false;
-        void update('schedule', { time: element('time').value });
+        void updateUpload(uploadEnabled.checked, uploadInterval.valueAsNumber);
       });
-      element('disable').addEventListener('click', () => { edited = false; void update('schedule', { time: '' }); });
       const interval = setInterval(refresh, 1000);
       window.addEventListener('pagehide', () => {
         lifetime.abort();

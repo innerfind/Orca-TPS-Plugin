@@ -12,7 +12,7 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const challengeOf = value => createHash('sha256').update(value).digest('base64url');
 const tokenPattern = /^[\w-]{43}$/;
 const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
-const statuses = { accepted: 201, invalid: 400, duplicate: 409, locked: 429, banned: 403 };
+const statuses = { accepted: 201, invalid: 400, duplicate: 409, removed: 409, too_soon: 429, locked: 429, banned: 403 };
 const feedback = { updated: '已保存。', rejected: '操作未执行，请检查输入。', forbidden: '该 GitHub 账号没有管理权限。', failed: 'GitHub 登录未完成，请重新登录。' };
 
 function cookieValue(req, name) {
@@ -264,14 +264,15 @@ export function createLeaderboardServer({
   async function admin(req, res, url, time) {
     const token = cookieValue(req, adminCookie);
     const account = tokenPattern.test(token ?? '') ? store.session(digest(token), 'admin', time) : null;
-    const permitted = account && !account.banned && account.id === store.administrator();
+    const permitted = account && account.id === store.administrator();
     if (req.method === 'GET' && url.pathname === '/admin') {
       const day = url.searchParams.get('day'), search = (url.searchParams.get('q') ?? '').slice(0, 39);
       const message = feedback[url.searchParams.get('feedback')];
       if (!permitted) return send(res, 200, adminLogin(message, githubConfigured), 'text/html; charset=utf-8');
       const selected = validDay(day) ? day : leaderboardDay(time);
       return send(res, 200, adminPage({
-        day: selected, search, username: account.username, feedback: message, ...store.adminView(selected, search)
+        day: selected, search, username: account.username, feedback: message,
+        ...store.adminView(selected, search, leaderboardDay(time))
       }), 'text/html; charset=utf-8');
     }
     if (req.method !== 'POST') return send(res, 404, { code: 'not_found' });
@@ -282,10 +283,10 @@ export function createLeaderboardServer({
       return redirect(res, '/admin');
     }
     const form = new URLSearchParams(await readBody(req) ?? ''), day = form.get('day');
-    const target = Number(form.get('account')), safeTarget = Number.isSafeInteger(target) && target > 0;
+    const target = Number(form.get('account')), safeTarget = Number.isSafeInteger(target) && target !== 0;
     let result = 'rejected';
-    if (url.pathname === '/admin/ban' && safeTarget && ['0', '1'].includes(form.get('ban'))) {
-      if (store.setBan(account.id, target, form.get('ban') === '1', time)) result = 'updated';
+    if (url.pathname === '/admin/ban' && safeTarget && target > 0 && ['0', '1'].includes(form.get('ban'))) {
+      if (store.setBan(account.id, target, form.get('ban') === '1', time, form.get('reason') ?? '')) result = 'updated';
     } else if (url.pathname === '/admin/delete' && validDay(day) && safeTarget) {
       store.removeScores(account.id, { day, account: target }, time);
       result = 'updated';

@@ -3,6 +3,10 @@ import { leaderboardDay, leaderboardDayStart } from '../src/usage-summary.mjs';
 
 const TEN_MINUTES = 10 * 60 * 1000;
 const DAY = 24 * 60 * 60 * 1000;
+const UPLOAD_INTERVAL = 10_000;
+const RAPID_UPLOAD_INTERVAL = 5000;
+const RAPID_UPLOAD_REASON = '连续 4 次上传间隔不足 5 秒';
+const DAILY_LOCK_REASON = '10 分钟内提交错误累计 5 次';
 
 export function openLeaderboardStore(filename) {
   const db = new DatabaseSync(filename);
@@ -16,6 +20,9 @@ export function openLeaderboardStore(filename) {
     CREATE TABLE IF NOT EXISTS administrator (
       slot INTEGER PRIMARY KEY CHECK(slot=1), account INTEGER NOT NULL REFERENCES accounts(id)
     );
+    CREATE TABLE IF NOT EXISTS ban_reasons (
+      account INTEGER PRIMARY KEY REFERENCES accounts(id), reason TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS sessions (
       digest TEXT PRIMARY KEY, account INTEGER NOT NULL REFERENCES accounts(id),
       kind TEXT NOT NULL, expires INTEGER NOT NULL
@@ -25,6 +32,14 @@ export function openLeaderboardStore(filename) {
       tokens INTEGER, submitted_at INTEGER NOT NULL, PRIMARY KEY(day, account)
     );
     CREATE INDEX IF NOT EXISTS score_order ON scores(day, tokens DESC, submitted_at, account);
+    CREATE TABLE IF NOT EXISTS score_updates (
+      day TEXT NOT NULL, account INTEGER NOT NULL REFERENCES accounts(id),
+      updated_at INTEGER NOT NULL, PRIMARY KEY(day, account)
+    );
+    CREATE INDEX IF NOT EXISTS score_update_clock ON score_updates(account, updated_at DESC);
+    CREATE TABLE IF NOT EXISTS upload_attempt_clock (
+      account INTEGER PRIMARY KEY REFERENCES accounts(id), attempted_at INTEGER NOT NULL, consecutive INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS attempts (
       day TEXT NOT NULL, account INTEGER NOT NULL REFERENCES accounts(id), request_id TEXT NOT NULL,
       fingerprint TEXT NOT NULL, outcome TEXT NOT NULL, received_at INTEGER NOT NULL,
@@ -33,6 +48,10 @@ export function openLeaderboardStore(filename) {
     CREATE INDEX IF NOT EXISTS attempt_window ON attempts(day, account, received_at);
     CREATE TABLE IF NOT EXISTS locks (
       day TEXT NOT NULL, account INTEGER NOT NULL REFERENCES accounts(id), PRIMARY KEY(day, account)
+    );
+    CREATE TABLE IF NOT EXISTS lock_reasons (
+      day TEXT NOT NULL, account INTEGER NOT NULL, reason TEXT NOT NULL, PRIMARY KEY(day, account),
+      FOREIGN KEY(day, account) REFERENCES locks(day, account) ON DELETE CASCADE
     );
     CREATE TABLE IF NOT EXISTS audit (
       id INTEGER PRIMARY KEY, account INTEGER NOT NULL REFERENCES accounts(id),
@@ -76,28 +95,49 @@ export function openLeaderboardStore(filename) {
     `, digest, kind, now);
   }
 
-  function status(account, now) {
+  function readScore(account, day) {
+    return get(`
+      SELECT scores.tokens, scores.submitted_at, COALESCE(score_updates.updated_at, scores.submitted_at) AS uploaded_at
+      FROM scores LEFT JOIN score_updates USING (day, account)
+      WHERE scores.day=? AND scores.account=?
+    `, day, account);
+  }
+
+  function nextUpload(account, now) {
+    const updated = get('SELECT updated_at FROM score_updates WHERE account=? ORDER BY updated_at DESC LIMIT 1', account);
+    const legacy = get('SELECT MAX(submitted_at) AS at FROM scores WHERE day IN (?, ?) AND account=?',
+      leaderboardDay(now), leaderboardDay(now - UPLOAD_INTERVAL), account);
+    const next = Math.max(updated?.updated_at ?? -Infinity, legacy?.at ?? -Infinity) + UPLOAD_INTERVAL;
+    return next > now ? next : null;
+  }
+
+  function status(account, now, score = readScore(account, leaderboardDay(now))) {
     const day = leaderboardDay(now);
-    const score = get('SELECT tokens, submitted_at FROM scores WHERE day=? AND account=?', day, account);
     const locked = Boolean(get('SELECT 1 FROM locks WHERE day=? AND account=?', day, account));
     return {
-      day, submitted: Boolean(score), tokens: score?.tokens ?? null, submittedAt: score?.submitted_at ?? null,
-      lockedUntil: locked ? leaderboardDayStart(day) + DAY : null
+      day, submitted: Boolean(score), tokens: score?.tokens ?? null, submittedAt: score?.uploaded_at ?? null,
+      lockedUntil: locked ? leaderboardDayStart(day) + DAY : null,
+      nextUploadAt: nextUpload(account, now)
     };
   }
 
   function ranking(account, now) {
-    const state = account === null ? { day: leaderboardDay(now) } : status(account, now);
+    const day = leaderboardDay(now);
+    const score = account === null ? null : readScore(account, day);
+    const state = account === null ? { day } : status(account, now, score);
     const rows = all(`
-      SELECT accounts.username, scores.account, tokens, submitted_at AS submittedAt
+      SELECT accounts.username, scores.account, scores.tokens,
+        COALESCE(score_updates.updated_at, scores.submitted_at) AS submittedAt
       FROM scores JOIN accounts ON accounts.id=scores.account
-      WHERE day=? AND tokens IS NOT NULL ORDER BY tokens DESC, submitted_at, scores.account LIMIT 100
+      LEFT JOIN score_updates USING (day, account)
+      WHERE scores.day=? AND scores.tokens IS NOT NULL
+      ORDER BY scores.tokens DESC, scores.submitted_at, scores.account LIMIT 100
     `, state.day).map(({ account: id, ...row }, index) => ({ ...row, rank: index + 1, mine: id === account }));
-    const rank = state.tokens == null ? null : 1 + get(`
+    const rank = score?.tokens == null ? null : 1 + get(`
       SELECT COUNT(*) AS count FROM scores WHERE day=? AND (
         tokens>? OR (tokens=? AND (submitted_at<? OR (submitted_at=? AND account<?)))
       )
-    `, state.day, state.tokens, state.tokens, state.submittedAt, state.submittedAt, account).count;
+    `, day, score.tokens, score.tokens, score.submitted_at, score.submitted_at, account).count;
     return { ...state, rank, rows };
   }
 
@@ -109,33 +149,60 @@ export function openLeaderboardStore(filename) {
       const oldAttempt = get(`
         SELECT outcome FROM attempts WHERE day=? AND account=? AND request_id=? AND fingerprint=?
       `, day, account, requestId, fingerprint);
-      if (oldAttempt) return oldAttempt.outcome === 'accepted' ? 'duplicate' : oldAttempt.outcome;
-      let outcome = 'accepted';
-      if (get('SELECT 1 FROM scores WHERE day=? AND account=?', day, account)) outcome = 'duplicate';
-      else if (get('SELECT 1 FROM attempts WHERE day=? AND account=? AND request_id=?', day, account, requestId) ||
-          requestedDay !== day || !Number.isSafeInteger(tokens) || tokens < 1 || tokens > maxTokens) outcome = 'invalid';
-
-      run('INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?)', day, account, requestId, fingerprint, outcome, now);
-      if (outcome === 'accepted') {
-        run('INSERT INTO scores VALUES (?, ?, ?, ?)', day, account, tokens, now);
-        return outcome;
+      if (oldAttempt) return oldAttempt.outcome;
+      const recent = get('SELECT attempted_at, consecutive FROM upload_attempt_clock WHERE account=?', account);
+      const consecutive = recent && now - recent.attempted_at < RAPID_UPLOAD_INTERVAL ? recent.consecutive + 1 : 0;
+      run(`INSERT INTO upload_attempt_clock VALUES (?, ?, ?) ON CONFLICT(account)
+        DO UPDATE SET attempted_at=excluded.attempted_at, consecutive=excluded.consecutive`, account, now, consecutive);
+      if (consecutive > 3) {
+        banAccount(account, RAPID_UPLOAD_REASON);
+        return 'banned';
       }
+      const score = get('SELECT tokens FROM scores WHERE day=? AND account=?', day, account);
+      if (score?.tokens === null) return 'removed';
+      const invalid = Boolean(get('SELECT 1 FROM attempts WHERE day=? AND account=? AND request_id=?', day, account, requestId)) ||
+        requestedDay !== day || !Number.isSafeInteger(tokens) || tokens < 1 || tokens > maxTokens;
+
+      if (!invalid) {
+        if (nextUpload(account, now) !== null) {
+          run('INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?)', day, account, requestId, fingerprint, 'too_soon', now);
+          return 'too_soon';
+        }
+        run(`INSERT INTO scores(day, account, tokens, submitted_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT(day, account) DO UPDATE SET tokens=excluded.tokens`, day, account, tokens, now);
+        run(`INSERT INTO score_updates VALUES (?, ?, ?)
+          ON CONFLICT(day, account) DO UPDATE SET updated_at=excluded.updated_at`, day, account, now);
+        run('INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?)', day, account, requestId, fingerprint, 'accepted', now);
+        return 'accepted';
+      }
+      run('INSERT INTO attempts VALUES (?, ?, ?, ?, ?, ?)', day, account, requestId, fingerprint, 'invalid', now);
       const { count } = get(`
         SELECT COUNT(*) AS count FROM attempts
-        WHERE day=? AND account=? AND received_at>? AND outcome!='accepted'
+        WHERE day=? AND account=? AND received_at>? AND outcome IN ('invalid', 'duplicate')
       `, day, account, now - TEN_MINUTES);
-      if (count < 5) return outcome;
+      if (count < 5) return 'invalid';
       run('INSERT INTO locks VALUES (?, ?)', day, account);
+      run('INSERT INTO lock_reasons VALUES (?, ?, ?)', day, account, DAILY_LOCK_REASON);
       return 'locked';
     });
   }
 
-  function setBan(actor, account, banned, now) {
-    if (account === administrator()) return false;
+  function banAccount(account, reason) {
+    const changed = run('UPDATE accounts SET banned=1 WHERE id=? AND banned=0', account);
+    if (!changed.changes) return false;
+    run(`INSERT INTO ban_reasons(account, reason) VALUES (?, ?)
+      ON CONFLICT(account) DO UPDATE SET reason=excluded.reason`, account, reason);
+    return true;
+  }
+
+  function setBan(actor, account, banned, now, reason = '') {
+    if (banned && (account === administrator() || !reason.trim() || reason.length > 200)) return false;
     return transaction(() => {
-      const changed = run('UPDATE accounts SET banned=? WHERE id=? AND banned!=?', Number(banned), account, Number(banned));
-      if (!changed.changes) return false;
-      audit(actor, banned ? 'ban' : 'unban', String(account), now);
+      const changed = banned ? banAccount(account, reason.trim()) :
+        run('UPDATE accounts SET banned=0 WHERE id=? AND banned=1', account).changes > 0;
+      if (!changed) return false;
+      if (!banned) run('DELETE FROM upload_attempt_clock WHERE account=?', account);
+      audit(actor, banned ? 'ban' : 'unban', banned ? account + ' · ' + reason.trim() : String(account), now);
       return true;
     });
   }
@@ -151,14 +218,23 @@ export function openLeaderboardStore(filename) {
     });
   }
 
-  function adminView(day, search) {
+  function adminView(day, search, currentDay = day) {
     return {
       scores: all(`
-        SELECT account, username, tokens, submitted_at AS submittedAt FROM scores
-        JOIN accounts ON accounts.id=scores.account WHERE day=? AND tokens IS NOT NULL AND instr(lower(username), lower(?))>0
-        ORDER BY tokens DESC, submitted_at, account LIMIT 500
+        SELECT scores.account, username, scores.tokens, COALESCE(score_updates.updated_at, scores.submitted_at) AS submittedAt
+        FROM scores JOIN accounts ON accounts.id=scores.account LEFT JOIN score_updates USING (day, account)
+        WHERE scores.day=? AND scores.tokens IS NOT NULL AND instr(lower(username), lower(?))>0
+        ORDER BY scores.tokens DESC, scores.submitted_at, scores.account LIMIT 500
       `, day, search),
-      accounts: all('SELECT id, username, banned FROM accounts WHERE instr(lower(username), lower(?))>0 ORDER BY banned DESC, username LIMIT 500', search),
+      accounts: all(`
+        SELECT accounts.id, accounts.username, accounts.banned, ban_reasons.reason,
+          locks.day AS lockedDay, lock_reasons.reason AS lockReason
+        FROM accounts LEFT JOIN ban_reasons ON ban_reasons.account=accounts.id
+        LEFT JOIN locks ON locks.account=accounts.id AND locks.day=?
+        LEFT JOIN lock_reasons ON lock_reasons.account=locks.account AND lock_reasons.day=locks.day
+        WHERE accounts.id>0 AND instr(lower(accounts.username), lower(?))>0
+        ORDER BY accounts.banned DESC, (locks.day IS NOT NULL) DESC, accounts.username LIMIT 500
+      `, currentDay, search),
       audit: all(`
         SELECT action, target, at, username FROM audit JOIN accounts ON accounts.id=audit.account
         ORDER BY audit.id DESC LIMIT 25
@@ -173,6 +249,9 @@ export function openLeaderboardStore(filename) {
       run('DELETE FROM attempts WHERE day<?', day);
       run('DELETE FROM locks WHERE day<?', day);
       run('DELETE FROM scores WHERE day<? AND tokens IS NULL', day);
+      run(`DELETE FROM score_updates WHERE updated_at<=? AND NOT EXISTS (
+        SELECT 1 FROM scores WHERE scores.day=score_updates.day AND scores.account=score_updates.account
+      )`, now - UPLOAD_INTERVAL);
     });
   }
 
