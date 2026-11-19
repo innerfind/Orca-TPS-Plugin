@@ -61,15 +61,16 @@ export function createRemoteUsageScan(discover = discoverUsageUnits) {
   let units, descriptors;
   return async request => {
     if (request.type === 'list') {
-      const { offset, cutoffMs, timeZone } = request;
+      const { offset, cutoffMs, timeZone, rankDay } = request;
       if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('offset');
       if (offset === 0) {
         if (!Number.isFinite(cutoffMs) || cutoffMs < 0 || !clean(timeZone) || timeZone.length > 100) throw new Error('calendar');
+        if (rankDay !== undefined && (typeof rankDay !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(rankDay))) throw new Error('calendar');
         // Usage has its own short-lived SSH stream. Date buckets match the desktop even
         // when the machine that owns the logs has another system time zone.
         new Intl.DateTimeFormat('en', { timeZone });
         process.env.TZ = timeZone;
-        units = new Map((await discover(cutoffMs)).map(unit => [unit.key, unit]));
+        units = new Map((await discover(cutoffMs, { rankDay })).map(unit => [unit.key, unit]));
         descriptors = [...units.values()].map(({ key, stamp, bytes, mtimeMs }) => ({
           key, stamp: createHash('sha256').update(stamp).digest('hex').slice(0, 24), bytes, mtimeMs
         }));

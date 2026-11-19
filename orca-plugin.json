@@ -69,6 +69,9 @@
     },
     {
       "kind": "workspace:read"
+    },
+    {
+      "kind": "secrets:own"
     }
   ]
 }

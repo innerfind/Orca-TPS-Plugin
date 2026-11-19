@@ -4,11 +4,12 @@ import { createTpsController } from './controller.mjs';
 import { createRemoteChannelReader, createRemoteUsageReader } from './remote-channel.mjs';
 import { createChannelCache } from './channel-cache.mjs';
 import { createUsageIndex } from './usage-summary.mjs';
+import { startLeaderboard } from './leaderboard.mjs';
 
 // Backfill runs quickly while files are pending; once every unit is current, refresh slowly.
 const BACKFILL_DELAY_MS = 15_000, IDLE_DELAY_MS = 60_000, FIRST_DELAY_MS = 3_000;
 
-let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, running = false;
+let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, stopLeaderboard, running = false;
 
 export default async function activate(orca) {
   await deactivate();
@@ -30,8 +31,11 @@ export default async function activate(orca) {
   usageAbort = new AbortController();
   usage = createUsageIndex({
     storage: orca.storage,
-    async discover(cutoffMs) {
-      const [localUnits, remoteUnits] = await Promise.all([discoverUsageUnits(cutoffMs), history.discover(cutoffMs)]);
+    leaderboard: true,
+    async discover(cutoffMs, rankDay) {
+      const [localUnits, remoteUnits] = await Promise.all([
+        discoverUsageUnits(cutoffMs, { rankDay }), history.discover(cutoffMs, rankDay)
+      ]);
       return { ...remoteUnits, descriptors: [...localUnits, ...remoteUnits.descriptors] };
     },
     log: message => orca.log(message)
@@ -41,6 +45,13 @@ export default async function activate(orca) {
     await usage.ready();
     return usage.summary();
   });
+  const index = usage;
+  try {
+    stopLeaderboard = startLeaderboard(orca, { async readUsage() {
+      await index.ready();
+      return index.leaderboardUsage();
+    } });
+  } catch { orca.log('天梯榜地址无效，请检查配置。'); }
   schedule(orca, FIRST_DELAY_MS);
 }
 
@@ -69,6 +80,8 @@ export async function deactivate() {
   timer = undefined;
   handler?.dispose?.();
   handler = undefined;
+  stopLeaderboard?.();
+  stopLeaderboard = undefined;
   controller?.stop();
   controller = undefined;
   usage = undefined;

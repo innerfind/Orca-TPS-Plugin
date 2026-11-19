@@ -38,11 +38,17 @@ export function usageCutoffMs(nowMs) {
 }
 
 /** Adds one source's records into `days[day][provider][model] = [requests, fresh, output, cacheRead, cacheWrite]`. */
-export function accumulateRecords(days, provider, records, { minDay = '' } = {}) {
+export function accumulateRecords(days, provider, records, { minDay = '', leaderboardDays } = {}) {
   for (const record of records) {
     if (!Number.isFinite(record?.completedAt)) continue;
     const day = localDayKey(record.completedAt);
     if (day < minDay) continue;
+    if (leaderboardDays && record.completedAt >= leaderboardDays.start && record.completedAt < leaderboardDays.end) {
+      const tokens = [record.freshInputTokens, record.outputTokens, record.cacheReadTokens, record.cacheCreationTokens]
+        .reduce((total, value) => total + numberOr0(value), 0);
+      const { day, totals } = leaderboardDays;
+      totals[day] = (totals[day] ?? 0) + tokens;
+    }
     const model = typeof record.model === 'string' && record.model ? record.model.slice(0, 128) : '';
     const byModel = (days[day] ??= {})[provider] ??= {};
     const cell = byModel[model] ??= new Array(COUNTERS).fill(0);
@@ -62,6 +68,10 @@ export function accumulateRecords(days, provider, records, { minDay = '' } = {})
 }
 
 const numberOr0 = value => Number.isFinite(value) && value > 0 ? value : 0;
+
+const BEIJING_OFFSET_MS = 8 * 60 * 60 * 1000;
+export const leaderboardDay = ms => new Date(ms + BEIJING_OFFSET_MS).toISOString().slice(0, 10);
+export const leaderboardDayStart = day => Date.parse(`${day}T00:00:00+08:00`);
 
 /** CC Switch's "real total": new input + output + cache writes + cache reads. */
 export function realTokens(counters) {
@@ -180,9 +190,10 @@ const validUnit = value => value && typeof value === 'object' && typeof value.st
 const LARGE_UNIT_BYTES = 64 * 1024 * 1024, LARGE_UNIT_INTERVAL_MS = 10 * 60_000;
 const RETRY_MIN_MS = 15_000, RETRY_MAX_MS = 10 * 60_000;
 
-export function createUsageIndex({ storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, log = () => {} }) {
+export function createUsageIndex({ storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, leaderboard = false, log = () => {} }) {
   const units = new Map();
   let loaded = null, progress = { done: 0, total: 0 }, updatedAt = null;
+  let readyLeaderboardDay = '';
 
   async function load() {
     const keys = (await storage.keys()).filter(key => key.startsWith(UNIT_KEY_PREFIX));
@@ -201,7 +212,10 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
   async function refresh({ signal } = {}) {
     await ready();
     signal?.throwIfAborted();
-    const discovery = await discover(usageCutoffMs(now()));
+    const refreshAt = now();
+    const rankDay = leaderboardDay(refreshAt);
+    const rankStart = leaderboardDayStart(rankDay);
+    const discovery = await discover(usageCutoffMs(refreshAt), leaderboard ? rankDay : undefined);
     signal?.throwIfAborted();
     const { descriptors, coveredRemoteScopes } = Array.isArray(discovery)
       ? { descriptors: discovery, coveredRemoteScopes: new Set() }
@@ -219,11 +233,13 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     const deferred = descriptor => {
       const current = units.get(descriptor.key);
       return current !== undefined && !current.failed && current.stamp !== descriptor.stamp && descriptor.bytes > LARGE_UNIT_BYTES
+        && (!leaderboard || descriptor.mtimeMs < rankStart || current.leaderboardFrom === rankDay)
         && now() - (current.readAt ?? 0) < LARGE_UNIT_INTERVAL_MS;
     };
     const needsRead = descriptor => {
       const current = units.get(descriptor.key);
-      return !current || current.failed || current.stamp !== descriptor.stamp || current.schema !== USAGE_SCHEMA;
+      return !current || current.failed || current.stamp !== descriptor.stamp || current.schema !== USAGE_SCHEMA ||
+        (leaderboard && descriptor.mtimeMs >= rankStart && current.leaderboardFrom !== rankDay);
     };
     const waitingRetry = descriptor => {
       const current = units.get(descriptor.key);
@@ -261,7 +277,10 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
       signal?.throwIfAborted();
       let unit;
       try {
-        unit = { stamp: descriptor.stamp, days: await readDays(descriptor), readAt: now(), schema: USAGE_SCHEMA };
+        const result = await readDays(descriptor);
+        const { days, leaderboardDays, leaderboardFrom } = leaderboard ? result : { days: result };
+        unit = { stamp: descriptor.stamp, days, readAt: now(), schema: USAGE_SCHEMA };
+        if (leaderboard) Object.assign(unit, { leaderboardDays, leaderboardFrom });
       } catch (error) {
         signal?.throwIfAborted();
         // Keep the last successful counts and retry even when a transient failure leaves the file unchanged.
@@ -285,6 +304,10 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
       total: descriptors.length
     };
     updatedAt = now();
+    if (leaderboard) {
+      const pendingToday = descriptors.some(item => item.mtimeMs >= rankStart && units.get(item.key)?.leaderboardFrom !== rankDay);
+      readyLeaderboardDay = pendingToday ? '' : rankDay;
+    }
     return { pending: progress.total - progress.done };
   }
 
@@ -293,5 +316,12 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     return { updatedAt, progress, windows: summarizeUsage(dayMaps, nowMs), daily: dailySeries(dayMaps, nowMs) };
   }
 
-  return { refresh, summary, ready };
+  function leaderboardUsage() {
+    const day = leaderboardDay(now());
+    let tokens = 0;
+    for (const unit of units.values()) tokens += unit.leaderboardDays?.[day] ?? 0;
+    return { day, tokens, updatedAt, ready: readyLeaderboardDay === day };
+  }
+
+  return { refresh, summary, ready, leaderboardUsage };
 }

@@ -170,14 +170,16 @@ test('remote usage counts the full history once per host and keeps totals when i
   });
   const stored = new Map(), day = localDayKey(completed.getTime());
   const local = { key: 'local-unit', stamp: 'same', bytes: 5, mtimeMs: completed.getTime(),
-    read: async () => ({ [day]: { claude: { 'local-model': [1, 2, 1, 0, 0, 0, 0, 0] } } }) };
+    read: async rankDay => ({ days: { [day]: { claude: { 'local-model': [1, 2, 1, 0, 0, 0, 0, 0] } } },
+      leaderboardDays: { [rankDay]: 3 }, leaderboardFrom: rankDay }) };
   const index = createUsageIndex({
     now: () => completed.getTime(),
+    leaderboard: true,
     storage: { keys: async () => [...stored.keys()], get: async key => stored.get(key),
       set: async (key, value) => stored.set(key, value), delete: async key => stored.delete(key) },
-    async discover(cutoffMs) {
-      const remote = await reader.discover(cutoffMs);
-      return { ...remote, descriptors: [local, ...remote.descriptors] };
+    async discover(cutoffMs, rankDay) {
+      const remote = await reader.discover(cutoffMs, rankDay);
+      return { ...remote, descriptors: [{ ...local, read: () => local.read(rankDay) }, ...remote.descriptors] };
     }
   });
   async function refresh() {
@@ -188,6 +190,8 @@ test('remote usage counts the full history once per host and keeps totals when i
     await refresh();
     assert.equal(index.summary().windows.today.requests, sessions + 1);
     assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
+    assert.equal(index.leaderboardUsage().tokens, sessions * 5 + 3);
+    assert.equal(index.leaderboardUsage().ready, true);
     assert.equal(launches, 1);
     const initialWrites = writes;
     await refresh();
@@ -195,6 +199,7 @@ test('remote usage counts the full history once per host and keeps totals when i
     online = false;
     await refresh();
     assert.equal(index.summary().windows.today.tokens, sessions * 5 + 3);
+    assert.equal(index.leaderboardUsage().tokens, sessions * 5 + 3);
   } finally {
     await reader.dispose();
   }
