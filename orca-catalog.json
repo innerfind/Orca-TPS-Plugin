@@ -17,6 +17,81 @@
       ],
       "releases": [
         {
+          "version": "1.6.4",
+          "commit": "1bac1fcd07b919e58f628ccab71a643cac37d6eb",
+          "contentHash": "82df350ecea47b33043cb87c6dede31f6fe4a9adbe2f33d5ab69925c9209f3ad",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.251",
+          "name": "TPS Plugin",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "TPS Plugin"
+            },
+            {
+              "kind": "commands",
+              "name": "Refresh TPS Data"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "🚀 — tokens/s · 🍪 Cache hit —"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read",
+            "secrets:own"
+          ],
+          "images": {
+            "icon": {
+              "path": "assets/1.6.3/icon.png",
+              "alt": "TPS Plugin",
+              "sha256": "c0690ab9054176277c92eb601125a1a3b3af20d662abaa980c3106295c3d42b9",
+              "width": 256,
+              "height": 256
+            },
+            "cover": {
+              "path": "assets/1.6.3/cover.png",
+              "alt": "TPS Plugin overview with Current Data, Personal Stats, and Leaderboard in the Orca sidebar",
+              "sha256": "44b2f07913ecdba02a8ecd85f30893ba78d31bde3989f6c90661342e5fad0ba3",
+              "width": 1600,
+              "height": 1000
+            },
+            "screenshots": [
+              {
+                "path": "assets/1.6.3/current-data.png",
+                "alt": "Orca sidebar request cards showing generation speed, first-token latency, output, and cache hit rate",
+                "sha256": "2d6f3b5e6719312f3c69112dfcb505b99300f4d08b0230bd2db681264cbaa09d",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.3/personal-stats.png",
+                "alt": "Personal Stats shows usage by model, average generation speeds, and an annual heatmap",
+                "sha256": "2dc1043cf8d87a426210d34b9000bb504faff4132db0ff697fb53f6e65f55ebe",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.3/leaderboard.png",
+                "alt": "Leaderboard with GitHub avatars, three ranking periods, medals, and the sync controls",
+                "sha256": "86a742bf6692f9d806ad8beaddd21d80d2f86ca6ba523268c45a0bef1431c0fa",
+                "width": 1600,
+                "height": 1000
+              }
+            ]
+          },
+          "license": "MIT",
+          "repository": "https://github.com/jecyxyf/Orca-TPS-Plugin",
+          "homepage": "https://github.com/jecyxyf/Orca-TPS-Plugin#readme",
+          "updatedAt": "2026-11-19T13:08:28.550Z",
+          "changelog": "Restored live token statistics for remote workspaces in the Linux AppImage by using the bundled Orca CLI."
+        },
+        {
           "version": "1.6.3",
           "commit": "183ff5267b7bffac106fc51e399597df98b631a5",
           "contentHash": "8f2fd097343e1bb35e0e1497df936058888246e67e14ce4f591879f24e1f58ec",
