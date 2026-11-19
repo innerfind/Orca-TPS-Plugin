@@ -16,7 +16,11 @@ The plugin supports local and SSH workspaces and remembers your choice of 10 int
 
 Open **TPS Plugin** in Orca’s right sidebar to switch between **Current Data**, **Personal Stats**, and **Leaderboard**.
 
-![TPS Plugion overview with all three tabs in English](./assets/readme/en/overview.png)
+<p align="center">
+  <a href="./assets/readme/en/overview.png" title="View full-size screenshot">
+    <img src="./assets/readme/en/overview.webp" width="640" alt="TPS Plugion overview with all three tabs in English">
+  </a>
+</p>
 
 *The screenshots use sample data.*
 
@@ -28,7 +32,11 @@ Open **TPS Plugin** in Orca’s right sidebar to switch between **Current Data**
 - See the model, output in KB, generation speed in tokens per second, request duration, time to first token (TTFT) when available, and cache hit rate.
 - Check the latest speed and cache hit rate in the Orca status bar. Estimated speeds are marked with ≈.
 
-![English Current Data tab showing request cards for Codex, Claude, Hermes, OpenCode, and Pi](./assets/readme/en/current-data.png)
+<p align="center">
+  <a href="./assets/readme/en/current-data.png" title="View full-size screenshot">
+    <img src="./assets/readme/en/current-data.webp" width="267" alt="English Current Data tab showing request cards for Codex, Claude, Hermes, OpenCode, and Pi">
+  </a>
+</p>
 
 ### 3.2 Personal Stats
 
@@ -36,7 +44,11 @@ Open **TPS Plugin** in Orca’s right sidebar to switch between **Current Data**
 - Break down usage by tool and model, and compare average model generation speeds. Usage in MB includes new input, output, cache reads, and cache writes.
 - Use the annual heatmap to see daily activity over the past year.
 
-![English Personal Stats tab showing totals, model usage, average speed, and the annual heatmap](./assets/readme/en/personal-stats.png)
+<p align="center">
+  <a href="./assets/readme/en/personal-stats.png" title="View full-size screenshot">
+    <img src="./assets/readme/en/personal-stats.webp" width="250" alt="English Personal Stats tab showing totals, model usage, average speed, and the annual heatmap">
+  </a>
+</p>
 
 ### 3.3 Leaderboard
 
@@ -44,7 +56,11 @@ Open **TPS Plugin** in Orca’s right sidebar to switch between **Current Data**
 - Sign in with GitHub to participate. The leaderboard combines usage across installations linked to the same account. The plugin fetches avatars directly from GitHub and uses a built-in hooded avatar while one is unavailable.
 - While signed in, the plugin attempts to sync every 10 seconds. Manual sync shares the same interval. The account card shows the countdown, the last successful sync, and any recent error.
 
-![English Leaderboard tab showing the account card, GitHub avatars, medals, and sync status](./assets/readme/en/leaderboard.png)
+<p align="center">
+  <a href="./assets/readme/en/leaderboard.png" title="View full-size screenshot">
+    <img src="./assets/readme/en/leaderboard.webp" width="266" alt="English Leaderboard tab showing the account card, GitHub avatars, medals, and sync status">
+  </a>
+</p>
 
 ## 4. Supported Harnesses
 

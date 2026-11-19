@@ -16,7 +16,11 @@ TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成�
 
 在 Orca 右侧栏打开 **TPS Plugin**，即可切换**当前数据**、**个人统计**和**天梯榜**。
 
-![TPS Plugion 总览图，展示三个中文分页](./assets/readme/zh-CN/overview.png)
+<p align="center">
+  <a href="./assets/readme/zh-CN/overview.png" title="查看原图">
+    <img src="./assets/readme/zh-CN/overview.webp" width="640" alt="TPS Plugion 总览图，展示三个中文分页">
+  </a>
+</p>
 
 *截图使用示例数据。*
 
@@ -28,7 +32,11 @@ TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成�
 - 查看模型、输出量（KB）、生成速度（tokens/s）、请求耗时和缓存命中率。有记录时也会显示首字延迟。
 - Orca 底部状态栏显示最新速度和缓存命中率。估算速度带有 ≈ 标记。
 
-![中文当前数据页，展示 Codex、Claude、Hermes、OpenCode 和 Pi 的请求卡片](./assets/readme/zh-CN/current-data.png)
+<p align="center">
+  <a href="./assets/readme/zh-CN/current-data.png" title="查看原图">
+    <img src="./assets/readme/zh-CN/current-data.webp" width="272" alt="中文当前数据页，展示 Codex、Claude、Hermes、OpenCode 和 Pi 的请求卡片">
+  </a>
+</p>
 
 ### 3.2 个人统计
 
@@ -36,7 +44,11 @@ TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成�
 - 按工具和模型查看用量，比较各模型的平均生成速度。用量以 MB 显示，包含新输入、输出和缓存读写。
 - 用年度热力图查看过去一年每天的用量。
 
-![中文个人统计页，展示用量汇总、模型用量、模型均速和年度热力图](./assets/readme/zh-CN/personal-stats.png)
+<p align="center">
+  <a href="./assets/readme/zh-CN/personal-stats.png" title="查看原图">
+    <img src="./assets/readme/zh-CN/personal-stats.webp" width="250" alt="中文个人统计页，展示用量汇总、模型用量、模型均速和年度热力图">
+  </a>
+</p>
 
 ### 3.3 天梯榜
 
@@ -44,7 +56,11 @@ TPS Plugion 是一款 Orca 插件，让你在侧栏查看 Token 用量和生成�
 - 通过 GitHub 登录后参加排名。同一账号在多个设备上的用量会汇总。头像由插件直接向 GitHub 获取，暂时取不到时显示内置的兜帽头像。
 - 登录后每 10 秒尝试自动同步，手动同步也使用同一个间隔。个人区会显示同步倒计时、上次成功时间和失败原因。
 
-![中文天梯榜，展示个人排名、GitHub 头像、奖牌和同步状态](./assets/readme/zh-CN/leaderboard.png)
+<p align="center">
+  <a href="./assets/readme/zh-CN/leaderboard.png" title="查看原图">
+    <img src="./assets/readme/zh-CN/leaderboard.webp" width="266" alt="中文天梯榜，展示个人排名、GitHub 头像、奖牌和同步状态">
+  </a>
+</p>
 
 ## 4. 支持的 Harness
 
