@@ -241,4 +241,6 @@
   <message id="next-sync-countdown">Sinkronisasi berikutnya {0}</message>
   <message id="sync-in-progress">Menyinkronkan…</message>
   <message id="sync-waiting">Menunggu sinkronisasi…</message>
+  <message id="sync-now">Sinkronkan sekarang</message>
+  <message id="sync-queued">Dalam antrean untuk sinkronisasi berikutnya</message>
 </messages>

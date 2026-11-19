@@ -580,6 +580,68 @@ test('logout prevents retrying or recording an earlier automatic submission', as
   assert.equal(requests.length, 2);
 });
 
+test('manual sync uses the shared cooldown, coalesces clicks, and keeps the last successful time', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let time = START, handler, uploads = 0, secrets = 'a'.repeat(43);
+  const storage = new Map();
+  const launch = () => startLeaderboard({
+    grantedCapabilities: ['secrets:own'],
+    host: { has: () => true, call: async (method, args) => {
+      if (method === 'secrets.get') return { value: secrets };
+      secrets = args.value;
+    } },
+    storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
+    panels: { handle: (_, fn) => { handler = fn; return { dispose() {} }; } }
+  }, {
+    endpoint: ORIGIN,
+    now: () => new Date(time),
+    readUsage: async () => ({ ready: true, day: TODAY, tokens: 1234 }),
+    fetcher: async url => {
+      if (url.pathname === '/api/auth/logout') return Response.json({ ok: true });
+      assert.equal(url.pathname, '/api/today/submit');
+      if (++uploads !== 1) return Response.json({ code: 'unavailable' }, { status: 503 });
+      return Response.json({ code: 'accepted', day: TODAY, username: 'alice', tokens: 1234, submitted: true,
+        submittedAt: time, nextUploadAt: time + 10_000 });
+    }
+  });
+  let stop = launch();
+  t.after(() => stop());
+  const run = action => handler({ action });
+  const immediate = await Promise.all([run('sync'), run('sync')]);
+  assert.deepEqual(immediate.map(result => result.code).sort(), ['accepted', 'upload_in_progress']);
+  assert.equal(immediate.find(result => result.code === 'accepted').lastSyncAt, START);
+  assert.equal(uploads, 1);
+  stop();
+  stop = launch();
+  assert.equal((await run('session')).lastSyncAt, START);
+
+  time = START + 1_000;
+  for (const result of await Promise.all([run('sync'), run('sync')])) {
+    assert.equal(result.code, 'sync_queued');
+    assert.equal(result.manualQueued, true);
+    assert.equal(result.lastSyncAt, START);
+  }
+  time = START + 9_999;
+  t.mock.timers.tick(1000);
+  await delay(10);
+  assert.equal(uploads, 1);
+  time += 1;
+  t.mock.timers.tick(1000);
+  for (let tries = 0; tries < 25 && (await run('session')).lastUpload?.code !== 'unavailable'; tries++) await delay(5);
+  const failed = await run('session');
+  assert.equal(uploads, 2);
+  assert.equal(failed.manualQueued, false);
+  assert.deepEqual(failed.lastUpload, { kind: 'manual', code: 'unavailable', at: time });
+  assert.equal(failed.lastSyncAt, START);
+
+  assert.equal((await run('sync')).code, 'sync_queued', 'a failed request also starts the shared cooldown');
+  assert.equal((await run('logout')).manualQueued, false);
+  time += 20_000;
+  t.mock.timers.tick(1000);
+  await delay(10);
+  assert.equal(uploads, 2);
+});
+
 test('the plugin shows the ranking while local usage is still loading', { timeout: 3000 }, async t => {
   let handle, finishUsage;
   const usage = new Promise(resolve => { finishUsage = resolve; });

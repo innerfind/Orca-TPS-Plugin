@@ -84,7 +84,10 @@ export function createRemoteUsageScan(discover = discoverUsageUnits) {
         // when the machine that owns the logs has another system time zone.
         new Intl.DateTimeFormat('en', { timeZone });
         process.env.TZ = timeZone;
-        units = new Map((await discover(cutoffMs, { rankDay, rankFrom })).map(unit => [unit.key, unit]));
+        let complete = true;
+        const discovered = await discover(cutoffMs, { rankDay, rankFrom, onUnavailable: () => { complete = false; } });
+        if (!complete) throw new Error('usage_source_unavailable');
+        units = new Map(discovered.map(unit => [unit.key, unit]));
         descriptors = [...units.values()].map(({ key, stamp, bytes, mtimeMs }) => ({
           key, stamp: createHash('sha256').update(stamp).digest('hex').slice(0, 24), bytes, mtimeMs
         }));

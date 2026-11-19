@@ -1,11 +1,12 @@
 import { sourceMessage } from './locales.mjs';
-import { open, readFile, readdir, realpath, stat } from 'node:fs/promises';
+import { open, readdir, realpath, stat } from 'node:fs/promises';
 import { createReadStream, watch } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { setImmediate as yieldToRequests, setTimeout as delay } from 'node:timers/promises';
 import { configuredRoots, defaultRoots } from './data-paths.mjs';
 import {
   SESSION_PROXY_DEDUP_WINDOW_SECONDS,
@@ -17,12 +18,11 @@ import {
   antigravityWorkspacePaths,
   mergeChannelProxyRecords,
   mergeProxyRecords,
-  parseJsonl,
   parseOpenCodeRows,
   readJsonlMetadata,
   recentRecords
 } from './parsers.mjs';
-import { HISTORY_DAYS, accumulateRecords, dayKeyAgo, leaderboardDayStart } from './usage-summary.mjs';
+import { BACKFILL_BYTES, HISTORY_DAYS, accumulateRecords, dayKeyAgo, leaderboardDayStart } from './usage-summary.mjs';
 import { hermesSources, readHermesRecords, readHermesSessions } from './hermes.mjs';
 
 const MAX_FILES = 1500, MAX_DIRECTORIES = 500, MAX_DEPTH = 8, MAX_SUBAGENT_FILES = 200;
@@ -1015,23 +1015,49 @@ async function walkRecentJsonl(root, cutoffMs) {
 }
 
 const USAGE_STREAM_BATCH_ROWS = 2_000;
+const USAGE_CHUNK_BYTES = 1024 * 1024;
 const usageObject = value => value && typeof value === 'object' && !Array.isArray(value) ? value : null;
 const usageText = value => typeof value === 'string' && value.trim() && value.length <= 256 ? value.trim() : null;
 
-/** Feeds parsed rows to onBatch in order, one 4 MB read at a time; a trailing unfinished line is not evidence yet. */
-async function streamJsonRows(file, onBatch) {
+function readPacer() {
+  let spent = 0;
+  return async bytes => {
+    spent += bytes;
+    if (spent >= BACKFILL_BYTES) { spent %= BACKFILL_BYTES; await delay(250); }
+    else await yieldToRequests();
+  };
+}
+
+/** Only complete lines contribute. Keep in-progress parser state across paced reads. */
+async function streamCompleteText(file, onChunk, pace) {
   const decoder = new StringDecoder('utf8');
-  let carry = '', batch = [];
-  for await (const chunk of createReadStream(file, { highWaterMark: 4 * 1024 * 1024 })) {
-    const pieces = (carry + decoder.write(chunk)).split('\n');
-    carry = pieces.pop();
-    for (const line of pieces) {
+  let carry = '', read = 0;
+  const metadata = await stat(file);
+  if (!metadata.size) return;
+  for await (const chunk of createReadStream(file, { highWaterMark: USAGE_CHUNK_BYTES, end: metadata.size - 1 })) {
+    const text = carry + decoder.write(chunk), end = text.lastIndexOf('\n') + 1;
+    if (end) await onChunk(text.slice(0, end));
+    carry = text.slice(end);
+    read += chunk.length;
+    await pace(chunk.length);
+  }
+  if (read !== metadata.size) throw new Error('TPS usage file changed while reading');
+}
+
+async function streamJsonRows(file, onBatch, pace) {
+  await streamCompleteText(file, async text => {
+    let batch = [];
+    for (const line of text.split('\n')) {
       const row = parsedRow(line);
       if (row) batch.push(row);
-      if (batch.length >= USAGE_STREAM_BATCH_ROWS) { await onBatch(batch); batch = []; }
+      if (batch.length >= USAGE_STREAM_BATCH_ROWS) {
+        onBatch(batch);
+        batch = [];
+        await yieldToRequests();
+      }
     }
-  }
-  if (batch.length) await onBatch(batch);
+    if (batch.length) onBatch(batch);
+  }, pace);
 }
 
 function parsedRow(line) {
@@ -1067,20 +1093,19 @@ function usageResult(days, rank) {
   return rank ? { days, leaderboardDays: rank.totals, leaderboardFrom: rank.from } : days;
 }
 
-async function addCodexStreamRecords(days, file, minDay, leaderboardDays) {
+async function addCodexStreamRecords(days, file, minDay, leaderboardDays, pace = readPacer()) {
   const parser = createCodexParser(await codexSessionId(file), { limit: Infinity });
-  await streamJsonRows(file, batch => parser.feed(batch));
+  await streamJsonRows(file, batch => parser.feed(batch), pace);
   accumulateRecords(days, 'codex', parser.finish(), { minDay, leaderboardDays });
 }
 
-async function addFileRecords(days, provider, file, minDay, isSubagent, leaderboardDays) {
+async function addFileRecords(days, provider, file, minDay, isSubagent, leaderboardDays, pace) {
   const metadata = await info(file);
   if (!metadata?.isFile()) return;
   if (metadata.size > USAGE_MAX_FILE_BYTES) throw Object.assign(new Error(sourceMessage('notice.session-file-too-large')), { code: 'too_large' });
-  const text = await readFile(file, 'utf8');
-  const complete = text.slice(0, text.lastIndexOf('\n') + 1);
-  const parsed = parseJsonl(complete, provider, '', { isSubagent, limit: Infinity });
-  accumulateRecords(days, provider, parsed.records, { minDay, leaderboardDays });
+  const cursor = createJsonlCursor('', provider, '', { isSubagent, limit: Infinity });
+  await streamCompleteText(file, text => cursor.feed(text), pace);
+  accumulateRecords(days, provider, cursor.finish(), { minDay, leaderboardDays });
 }
 
 async function fileUsageUnit(provider, file, rankWindow) {
@@ -1097,9 +1122,10 @@ async function fileUsageUnit(provider, file, rankWindow) {
     mtimeMs: file.mtimeMs,
     read: async () => {
       const minDay = dayKeyAgo(Date.now(), HISTORY_DAYS - 1), days = {}, rank = rankedUsage(rankWindow);
-      if (provider === 'codex') await addCodexStreamRecords(days, file.path, minDay, rank);
-      else await addFileRecords(days, provider, file.path, minDay, false, rank);
-      for (const item of subagents) await addFileRecords(days, 'claude', item.path, minDay, true, rank);
+      const pace = readPacer();
+      if (provider === 'codex') await addCodexStreamRecords(days, file.path, minDay, rank, pace);
+      else await addFileRecords(days, provider, file.path, minDay, false, rank, pace);
+      for (const item of subagents) await addFileRecords(days, 'claude', item.path, minDay, true, rank, pace);
       return usageResult(days, rank);
     }
   };
@@ -1109,12 +1135,25 @@ async function readOpenCodeSession(dbPath, v2, sessionId, rankWindow) {
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
   try {
-    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; PRAGMA trusted_schema=OFF;');
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=100; PRAGMA trusted_schema=OFF;');
     const messageTable = v2 ? 'session_message' : 'message', orderColumn = v2 ? 'seq' : 'rowid';
     const rows = db.prepare(`SELECT id,${v2 ? 'type' : 'NULL AS type'},time_created,${projectedData()}
-      FROM ${messageTable} WHERE session_id=? ORDER BY ${orderColumn} ASC`).all(sessionId);
+      FROM ${messageTable} WHERE session_id=? ORDER BY ${orderColumn} ASC`).iterate(sessionId);
     const days = {}, rank = rankedUsage(rankWindow);
-    accumulateRecords(days, v2 ? 'opencode2' : 'opencode', parseOpenCodeRows(rows, v2, { limit: Infinity }),
+    const records = new Map(), pace = readPacer();
+    let batch = [];
+    function collect() {
+      for (const record of parseOpenCodeRows(batch, v2, { limit: Infinity })) records.set(record.id, record);
+      batch = [];
+    }
+    for (const row of rows) {
+      batch.push(row);
+      if (batch.length < 512) continue;
+      collect();
+      await pace(512 * 1024);
+    }
+    collect();
+    accumulateRecords(days, v2 ? 'opencode2' : 'opencode', records.values(),
       { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1), leaderboardDays: rank });
     return usageResult(days, rank);
   } finally { db.close(); }
@@ -1131,7 +1170,7 @@ async function openCodeUsageUnits(dbPath, cutoffMs, rankWindow) {
   let db;
   try {
     db = new DatabaseSync(dbPath, { readOnly: true, enableExtensionLoading: false });
-    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=1000; PRAGMA trusted_schema=OFF;');
+    db.exec('PRAGMA query_only=ON; PRAGMA busy_timeout=100; PRAGMA trusted_schema=OFF;');
     const available = tables(db);
     for (const v2 of [false, true]) {
       const table = v2 ? 'session_v2' : 'session', messageTable = v2 ? 'session_message' : 'message';
@@ -1139,8 +1178,10 @@ async function openCodeUsageUnits(dbPath, cutoffMs, rankWindow) {
       const sessionColumns = columns(db, table);
       if (!sessionColumns.has('id') || !sessionColumns.has('time_updated')) continue;
       const provider = v2 ? 'opencode2' : 'opencode';
-      for (const row of db.prepare(`SELECT id, time_updated FROM ${table} WHERE time_updated >= ?`).all(cutoffMs)) {
-        const count = Number(db.prepare(`SELECT COUNT(*) AS n FROM ${messageTable} WHERE session_id=?`).get(row.id)?.n ?? 0);
+      const rows = db.prepare(`SELECT id, time_updated FROM ${table} WHERE time_updated >= ?`).iterate(cutoffMs);
+      const messageCount = db.prepare(`SELECT COUNT(*) AS n FROM ${messageTable} WHERE session_id=?`);
+      for (const row of rows) {
+        const count = Number(messageCount.get(row.id)?.n ?? 0);
         units.push({
           key: identity(`${provider}|${dbPath}|${row.id}`),
           stamp: `${row.time_updated}:${count}`,
@@ -1148,10 +1189,10 @@ async function openCodeUsageUnits(dbPath, cutoffMs, rankWindow) {
           mtimeMs: Number(row.time_updated) || 0,
           read: () => readOpenCodeSession(dbPath, v2, row.id, rankWindow)
         });
+        if (units.length % 64 === 0) await yieldToRequests();
       }
     }
-  } catch { /* An unreadable database contributes no OpenCode units this pass. */ }
-  finally { db?.close(); }
+  } finally { db?.close(); }
   return units;
 }
 
@@ -1180,11 +1221,10 @@ async function antigravityUsageUnits(brainRoot, cutoffMs, rankWindow) {
 
 async function readAntigravityUsage(transcript, conversationId, rankWindow) {
   const days = {}, notes = [], rank = rankedUsage(rankWindow);
-  const text = await readFile(transcript, 'utf8');
-  const complete = text.slice(0, text.lastIndexOf('\n') + 1);
   const native = await readAntigravityTimings(transcript, message => notes.push(message));
-  const parsed = parseJsonl(complete, 'antigravity', '', { sessionId: conversationId, native, limit: Infinity });
-  accumulateRecords(days, 'antigravity', parsed.records, { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1), leaderboardDays: rank });
+  const cursor = createJsonlCursor('', 'antigravity', '', { sessionId: conversationId, limit: Infinity });
+  await streamCompleteText(transcript, text => cursor.feed(text), readPacer());
+  accumulateRecords(days, 'antigravity', cursor.finish(native), { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1), leaderboardDays: rank });
   return usageResult(days, rank);
 }
 
@@ -1210,7 +1250,8 @@ export async function discoverUsageUnits(cutoffMs, options = {}) {
     for (const file of selected.values()) units.push(await fileUsageUnit(provider, file, rankWindow));
   }
   for (const root of (roots.opencode ?? []).slice(0, 10)) {
-    units.push(...await openCodeUsageUnits(root, cutoffMs, rankWindow));
+    try { units.push(...await openCodeUsageUnits(root, cutoffMs, rankWindow)); }
+    catch { options.onUnavailable?.(); }
   }
   for (const root of (roots.antigravity ?? []).slice(0, 10)) {
     units.push(...await antigravityUsageUnits(root, cutoffMs, rankWindow));
@@ -1223,7 +1264,7 @@ export async function discoverUsageUnits(cutoffMs, options = {}) {
       mtimeMs: source.mtimeMs,
       async read() {
         const days = {}, rank = rankedUsage(rankWindow);
-        const records = await readHermesRecords(source);
+        const records = await readHermesRecords(source, { pace: readPacer() });
         accumulateRecords(days, 'hermes', records, { minDay: dayKeyAgo(Date.now(), HISTORY_DAYS - 1), leaderboardDays: rank });
         return usageResult(days, rank);
       }

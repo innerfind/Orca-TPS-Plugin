@@ -241,4 +241,6 @@
   <message id="next-sync-countdown">अगला सिंक {0}</message>
   <message id="sync-in-progress">सिंक हो रहा है…</message>
   <message id="sync-waiting">सिंक का इंतज़ार…</message>
+  <message id="sync-now">अभी सिंक करें</message>
+  <message id="sync-queued">अगले सिंक के लिए कतार में</message>
 </messages>

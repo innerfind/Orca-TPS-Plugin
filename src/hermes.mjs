@@ -91,7 +91,7 @@ async function readAnchor(file, offset) {
   return buffer.subarray(0, bytesRead);
 }
 
-async function indexLog(filename) {
+async function indexLog(filename, pace) {
   const file = await open(filename, 'r');
   try {
     const metadata = await file.stat();
@@ -119,6 +119,7 @@ async function indexLog(filename) {
       const partial = bytes.subarray(last + 1);
       tail = partial.length <= MAX_PARTIAL_BYTES ? Buffer.from(partial) : empty;
       offset += bytesRead;
+      if (pace) await pace(bytesRead);
     }
     const entry = { version, offset, tail, anchor: await readAnchor(file, offset), records: old ? old.records.concat(records) : records };
     rememberLog(key, entry);
@@ -126,9 +127,9 @@ async function indexLog(filename) {
   } finally { await file.close(); }
 }
 
-function readLog(file) {
+function readLog(file, pace) {
   if (pendingLogs.has(file)) return pendingLogs.get(file);
-  const task = indexLog(file).finally(() => pendingLogs.delete(file));
+  const task = indexLog(file, pace).finally(() => pendingLogs.delete(file));
   pendingLogs.set(file, task);
   return task;
 }
@@ -178,11 +179,11 @@ export async function hermesSources(roots, cutoffMs = 0, warnings) {
   return sources;
 }
 
-export async function readHermesRecords(source) {
+export async function readHermesRecords(source, { pace } = {}) {
   if (source.bytes > MAX_LOG_BYTES) throw new Error(sourceMessage('notice.hermes-log-size'));
   const records = new Map();
   for (const file of source.files) {
-    for (const record of await readLog(file)) records.set(record.id, record);
+    for (const record of await readLog(file, pace)) records.set(record.id, record);
   }
   return [...records.values()];
 }

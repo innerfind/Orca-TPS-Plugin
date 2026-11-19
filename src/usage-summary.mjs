@@ -6,6 +6,8 @@ import { sourceMessage } from './locales.mjs';
 export const UNIT_KEY_PREFIX = 'usage:unit:';
 export const REMOTE_USAGE_PREFIX = 'remote:';
 export const USAGE_READ_BATCH = 16;
+export const BACKFILL_BYTES = 16 * 1024 * 1024;
+export const BACKFILL_UNITS = 8;
 export const WINDOWS = [['today', 1], ['week', 7], ['month', 30]];
 export const MAX_WINDOW_DAYS = 30;
 // The heatmap shows a year, so the index keeps a year of per-day counts; windows still use the spans above.
@@ -51,7 +53,7 @@ export function accumulateRecords(days, provider, records, { minDay = '', leader
       totals[day] = (totals[day] ?? 0) + tokens;
     }
     const model = typeof record.model === 'string' && record.model ? record.model.slice(0, 128) : '';
-    const byModel = (days[day] ??= {})[provider] ??= {};
+    const byModel = (days[day] ??= Object.create(null))[provider] ??= Object.create(null);
     const cell = byModel[model] ??= new Array(COUNTERS).fill(0);
     cell[0] += 1;
     cell[1] += numberOr0(record.freshInputTokens);
@@ -191,22 +193,59 @@ const validUnit = value => value && typeof value === 'object' && typeof value.st
 const LARGE_UNIT_BYTES = 64 * 1024 * 1024, LARGE_UNIT_INTERVAL_MS = 10 * 60_000;
 const RETRY_MIN_MS = 15_000, RETRY_MAX_MS = 10 * 60_000;
 
-export function createUsageIndex({ storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, leaderboard = false, rankDays = 1, log = () => {} }) {
+export function createUsageIndex({
+  storage, discover, now = () => Date.now(), budgetBytes = 2 * 1024 * 1024 * 1024, maxUnits = Infinity,
+  leaderboard = false, rankDays = 1, log = () => {}
+}) {
   const units = new Map();
-  let loaded = null, progress = { done: 0, total: 0 }, updatedAt = null;
-  let readyLeaderboardDay = '', readyHistoryDay = '';
+  const combined = Object.create(null), scores = new Map();
+  let loaded = null, progress = { done: 0, total: 0 }, updatedAt = null, summaryCache, summaryDay;
+  let readyLeaderboardDay = '', readyHistoryDay = '', moreBackfill = false;
+
+  function adjust(unit, direction) {
+    if (!unit) return;
+    for (const [day, agents] of Object.entries(unit.days)) {
+      const dayTotals = combined[day] ??= Object.create(null);
+      for (const [agent, models] of Object.entries(agents)) {
+        const agentTotals = dayTotals[agent] ??= Object.create(null);
+        for (const [model, counters] of Object.entries(models)) {
+          const total = agentTotals[model] ??= new Array(COUNTERS).fill(0);
+          for (let i = 0; i < COUNTERS; i++) total[i] += direction * (counters[i] ?? 0);
+          if (!total[0]) delete agentTotals[model];
+          else if (!total[SPEED_AT]) total[SPEED_AT + 1] = 0;
+        }
+        if (!Object.keys(agentTotals).length) delete dayTotals[agent];
+      }
+      if (!Object.keys(dayTotals).length) delete combined[day];
+    }
+    for (const [day, tokens] of Object.entries(unit.leaderboardDays ?? {})) {
+      const total = (scores.get(day) ?? 0) + direction * tokens;
+      if (total > 0) scores.set(day, total);
+      else scores.delete(day);
+    }
+  }
+
+  function setUnit(key, previous, next) {
+    if (!next || previous?.days !== next.days || previous?.leaderboardDays !== next.leaderboardDays) {
+      adjust(previous, -1);
+      adjust(next, 1);
+    }
+    if (next) units.set(key, next);
+    else units.delete(key);
+  }
 
   async function load() {
     const keys = (await storage.keys()).filter(key => key.startsWith(UNIT_KEY_PREFIX));
     for (const key of keys) {
       const value = await storage.get(key);
-      if (validUnit(value)) units.set(key.slice(UNIT_KEY_PREFIX.length), value);
+      if (validUnit(value)) setUnit(key.slice(UNIT_KEY_PREFIX.length), undefined, value);
     }
   }
 
   // Persisted units are loaded once, before the first summary or refresh can read them.
   const ready = () => {
-    loaded ??= load().catch(error => { log(sourceMessage('notice.usage-index-read-failed', error?.message ?? 'unknown')); });
+    loaded ??= load().catch(error => { log(sourceMessage('notice.usage-index-read-failed', error?.message ?? 'unknown')); })
+      .then(() => { summaryCache = undefined; summary(); });
     return loaded;
   };
 
@@ -220,15 +259,16 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     const historyStart = leaderboardDayStart(rankFrom);
     const discovery = await discover(usageCutoffMs(refreshAt), leaderboard ? rankDay : undefined, leaderboard ? rankFrom : undefined);
     signal?.throwIfAborted();
-    const { descriptors, coveredRemoteScopes } = Array.isArray(discovery)
+    const { descriptors, coveredRemoteScopes, localComplete = true, remoteComplete = true } = Array.isArray(discovery)
       ? { descriptors: discovery, coveredRemoteScopes: new Set() }
       : discovery;
     const wanted = new Set(descriptors.map(descriptor => descriptor.key));
     for (const key of [...units.keys()]) {
       signal?.throwIfAborted();
       if (wanted.has(key)) continue;
-      if (key.startsWith(REMOTE_USAGE_PREFIX) && !coveredRemoteScopes.has(key.slice(0, key.lastIndexOf(':') + 1))) continue;
-      units.delete(key);
+      const remote = key.startsWith(REMOTE_USAGE_PREFIX);
+      if (remote ? !coveredRemoteScopes.has(key.slice(0, key.lastIndexOf(':') + 1)) : !localComplete) continue;
+      setUnit(key, units.get(key));
       await storage.delete(UNIT_KEY_PREFIX + key).catch(() => {});
     }
     const missingToday = (descriptor, current) => descriptor.mtimeMs >= rankStart &&
@@ -254,13 +294,24 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
     };
     const pending = descriptors.filter(descriptor => needsRead(descriptor) && !deferred(descriptor) && !waitingRetry(descriptor))
       .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const incomplete = (descriptor, boundary, missing) => descriptor.mtimeMs >= boundary &&
+      (missing(descriptor, units.get(descriptor.key)) || needsRead(descriptor));
+    function updateReadiness() {
+      if (!leaderboard) return;
+      const complete = localComplete && remoteComplete;
+      readyLeaderboardDay = complete && !descriptors.some(item => incomplete(item, rankStart, missingToday)) ? rankDay : '';
+      readyHistoryDay = complete && !descriptors.some(item => incomplete(item, historyStart, missingHistory)) ? rankDay : '';
+    }
+    updateReadiness();
     let spent = 0;
     const selected = [];
     for (const descriptor of pending) {
+      if (selected.length >= maxUnits) break;
       if (selected.length && spent + descriptor.bytes > budgetBytes) break;
       spent += descriptor.bytes;
       selected.push(descriptor);
     }
+    moreBackfill = selected.length < pending.length;
     // Only selected, changed units are fetched. Share one SSH request per batch without
     // reading local files concurrently or taking work out of the existing byte budget.
     const groups = Map.groupBy(selected.filter(descriptor => descriptor.readMany), descriptor => descriptor.readMany);
@@ -302,7 +353,7 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
         log(sourceMessage('notice.usage-read-failed', error?.code ?? error?.message ?? 'unknown'));
       }
       signal?.throwIfAborted();
-      units.set(descriptor.key, unit);
+      setUnit(descriptor.key, units.get(descriptor.key), unit);
       try { await storage.set(UNIT_KEY_PREFIX + descriptor.key, unit); }
       catch (error) { log(sourceMessage('notice.usage-index-write-failed', error?.message ?? 'unknown')); }
     }
@@ -311,37 +362,33 @@ export function createUsageIndex({ storage, discover, now = () => Date.now(), bu
       total: descriptors.length
     };
     updatedAt = now();
-    if (leaderboard) {
-      const pendingToday = descriptors.some(item => missingToday(item, units.get(item.key)));
-      readyLeaderboardDay = pendingToday ? '' : rankDay;
-      readyHistoryDay = descriptors.some(item => missingHistory(item, units.get(item.key))) ? '' : rankDay;
-    }
+    updateReadiness();
+    summaryCache = undefined;
+    summary();
     return { pending: progress.total - progress.done };
   }
 
   function summary() {
-    const nowMs = now(), dayMaps = [...units.values()].map(unit => unit.days);
-    return { updatedAt, progress, windows: summarizeUsage(dayMaps, nowMs), daily: dailySeries(dayMaps, nowMs) };
+    const nowMs = now(), day = localDayKey(nowMs);
+    if (!summaryCache || day !== summaryDay) {
+      summaryDay = day;
+      summaryCache = { updatedAt, progress, windows: summarizeUsage([combined], nowMs), daily: dailySeries([combined], nowMs) };
+    }
+    return summaryCache;
   }
 
   function leaderboardUsage() {
     const day = leaderboardDay(now());
-    let tokens = 0;
-    for (const unit of units.values()) tokens += unit.leaderboardDays?.[day] ?? 0;
-    return { day, tokens, updatedAt, ready: readyLeaderboardDay === day };
+    return { day, tokens: scores.get(day) ?? 0, updatedAt, ready: readyLeaderboardDay === day };
   }
 
   function leaderboardHistory() {
     const nowMs = now(), day = leaderboardDay(nowMs);
     if (readyHistoryDay !== day) return { day, ready: false };
-    const from = leaderboardDay(nowMs - (rankDays - 1) * 86_400_000), totals = new Map();
-    for (const unit of units.values()) {
-      for (const [key, tokens] of Object.entries(unit.leaderboardDays ?? {})) {
-        if (key >= from && key <= day && tokens > 0) totals.set(key, (totals.get(key) ?? 0) + tokens);
-      }
-    }
-    return { day, ready: true, scores: [...totals.keys()].sort().map(day => ({ day, tokens: totals.get(day) })) };
+    const from = leaderboardDay(nowMs - (rankDays - 1) * 86_400_000);
+    const history = [...scores.keys()].filter(key => key >= from && key <= day).sort();
+    return { day, ready: true, scores: history.map(day => ({ day, tokens: scores.get(day) })) };
   }
 
-  return { refresh, summary, ready, leaderboardUsage, leaderboardHistory };
+  return { refresh, summary, ready, leaderboardUsage, leaderboardHistory, hasBackfill: () => moreBackfill };
 }

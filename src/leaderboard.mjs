@@ -15,6 +15,7 @@ const LOGIN_POLL = 2000;
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
 const LOGOUT_RETRY = 15_000;
 const UPLOAD_INTERVAL = 10_000;
+const SYNC_SUCCEEDED = new Set(['accepted', 'initialized', 'duplicate']);
 const sessionKey = value => value ? createHash('sha256').update(value).digest('hex') : '';
 const tokenPattern = /^[\w-]{43}$/;
 const validUsername = value => typeof value === 'string' && value.length > 0 && value.length <= 39;
@@ -47,8 +48,10 @@ export function startLeaderboard(orca, {
   let credentialStorageFailed = false;
   let historyJob, historyWrite = Promise.resolve(), historyProblem = '';
   const rankingCaches = new Map();
+  const rankingRequests = new Map();
+  let rankingQueue = Promise.resolve();
   let rankingRequest = 0;
-  let lastUpload = null;
+  let lastUpload = null, lastSyncAt = null, manualQueued = false, localUploadAt = 0;
   let installationReady;
   const secretAvailable = method => orca.grantedCapabilities?.includes('secrets:own') && host?.has(method);
   const today = () => leaderboardDay(now().getTime());
@@ -107,6 +110,10 @@ export function startLeaderboard(orca, {
     const cached = account.value;
     if (token && cached?.origin === base.origin && cached.session === sessionKey(token) && validUsername(cached.username)) {
       username = cached.username;
+      if (Number.isSafeInteger(cached.lastSyncAt) && cached.lastSyncAt >= 0 && cached.lastSyncAt <= now().getTime()) {
+        lastSyncAt = cached.lastSyncAt;
+        localUploadAt = lastSyncAt + UPLOAD_INTERVAL;
+      }
     }
     if (token && history.value?.origin === base.origin && history.value.session === sessionKey(token)) {
       historyJob = { next: nextAttempt };
@@ -140,7 +147,11 @@ export function startLeaderboard(orca, {
   function rememberUsername(value) {
     if (value === username) return;
     username = value;
-    const profile = value ? { origin: base.origin, session: sessionKey(token), username: value } : null;
+    saveAccount();
+  }
+
+  function saveAccount() {
+    const profile = username ? { origin: base.origin, session: sessionKey(token), username, lastSyncAt } : null;
     accountWrite = accountWrite.then(() => orca.storage.set(ACCOUNT_CACHE, profile)).catch(() => {});
   }
 
@@ -175,6 +186,9 @@ export function startLeaderboard(orca, {
     token = value;
     if (changed) {
       nextAttempt = token ? now().getTime() + UPLOAD_INTERVAL : null;
+      lastSyncAt = null;
+      manualQueued = false;
+      localUploadAt = 0;
       rememberUsername('');
       sessionProblem = problem;
       uploadStatus = undefined;
@@ -182,6 +196,7 @@ export function startLeaderboard(orca, {
       lastUpload = null;
       if (historyJob) setHistoryJob(undefined);
       historyProblem = '';
+      publishSession();
     }
     await persistCredentials();
   }
@@ -208,7 +223,15 @@ export function startLeaderboard(orca, {
     }
   }
 
-  async function state(days) {
+  function state(days) {
+    if (rankingRequests.has(days)) return rankingRequests.get(days);
+    const pending = rankingQueue.then(() => fetchState(days)).finally(() => rankingRequests.delete(days));
+    rankingRequests.set(days, pending);
+    rankingQueue = pending.catch(() => {});
+    return pending;
+  }
+
+  async function fetchState(days) {
     const cache = rankingCache(days);
     const requested = ++rankingRequest;
     const board = await request(days === 1 ? '/api/today' : '/api/today?days=' + days, { auth: false });
@@ -246,13 +269,29 @@ export function startLeaderboard(orca, {
       days, board: { ...board, authenticated: signedIn }, updatedAt, signedIn, sessionProblem,
       logoutPending: revocations.size > 0, logoutStorageFailed: revocations.size > 0 && credentialStorageFailed,
       nextAutomaticAt: nextAttempt === null ? null : Math.max(nextAttempt, board.nextUploadAt ?? 0, board.lockedUntil ?? 0),
-      uploading: Boolean(submitting), uploadingKind, lastUpload, initializing: Boolean(historyJob), historyProblem
+      uploading: Boolean(submitting), uploadingKind, lastUpload, lastSyncAt, manualQueued,
+      initializing: Boolean(historyJob), historyProblem
     };
+  }
+
+  let sessionSignature;
+  function publishSession() {
+    if (lifetime.signal.aborted || !orca.panels.post) return;
+    const snapshot = panelState(1), signature = JSON.stringify(snapshot);
+    if (signature === sessionSignature) return;
+    try {
+      orca.panels.post('tps.leaderboard.session', snapshot);
+      sessionSignature = signature;
+    } catch { /* The panel can still restore a snapshot on open. */ }
   }
 
   function recordUpload(kind, code) {
     if (code !== 'upload_in_progress' && code !== 'upload_disabled') {
       lastUpload = { kind, code: code || 'unavailable', at: now().getTime() };
+      if (SYNC_SUCCEEDED.has(code)) {
+        lastSyncAt = lastUpload.at;
+        if (username) saveAccount();
+      }
     }
   }
 
@@ -262,7 +301,7 @@ export function startLeaderboard(orca, {
   }
 
   function uploadDeadline(status, score) {
-    return Math.max(status.nextUploadAt ?? 0, score ? score.submittedAt + UPLOAD_INTERVAL : 0);
+    return Math.max(localUploadAt, status.nextUploadAt ?? 0, score ? score.submittedAt + UPLOAD_INTERVAL : 0);
   }
 
   function beginLogin() {
@@ -332,6 +371,7 @@ export function startLeaderboard(orca, {
       submitting = undefined;
       uploadingKind = null;
     });
+    publishSession();
     return submitting;
   }
 
@@ -356,7 +396,10 @@ export function startLeaderboard(orca, {
     if (kind === 'automatic' && result.code === 'unavailable' && token === credential && stillEnabled()) {
       result = await request('/api/today/submit', options);
     }
-    if (token === credential) rememberUpload(result);
+    if (token === credential) {
+      if (result.code !== 'banned') localUploadAt = now().getTime() + UPLOAD_INTERVAL;
+      rememberUpload(result);
+    }
     return result;
   }
 
@@ -366,6 +409,7 @@ export function startLeaderboard(orca, {
     if (result.code === 'banned') {
       banned = true;
       nextAttempt = null;
+      manualQueued = false;
       return;
     }
     if (day === today()) {
@@ -387,9 +431,11 @@ export function startLeaderboard(orca, {
     try {
       const preview = await readUsage();
       if (!stillSignedIn() || !preview.ready || preview.tokens < 1) return;
-      const result = await submit(preview, 'automatic', stillSignedIn);
+      const kind = manualQueued ? 'manual' : 'automatic';
+      manualQueued = false;
+      const result = await submit(preview, kind, stillSignedIn);
       if (stillSignedIn()) {
-        recordUpload('automatic', result.code);
+        recordUpload(kind, result.code);
         if (!banned) nextAttempt = Math.max(now().getTime() + UPLOAD_INTERVAL, result.nextUploadAt ?? 0, result.lockedUntil ?? 0);
       }
     } finally { scheduling = false; }
@@ -408,16 +454,17 @@ export function startLeaderboard(orca, {
       job.next = Math.max(job.next, status.lockedUntil ?? 0, nextUploadAt);
       if (status.lockedUntil > now().getTime() || nextUploadAt > now().getTime()) return;
       const snapshot = await readHistory();
-      if (!active() || !snapshot.ready || snapshot.day !== today() || submitting) return;
+      if (!active() || !snapshot.ready || snapshot.day !== today() || submitting || scheduling) return;
       if (!snapshot.scores.length) return setHistoryJob(undefined);
       const id = await installationId();
-      if (!active() || snapshot.day !== today() || submitting) return;
+      if (!active() || snapshot.day !== today() || submitting || scheduling || uploadDeadline(status, dailyScore(day)) > now().getTime()) return;
       if (!id) return recordUpload('history', 'installation_unavailable');
       const attempt = request('/api/history/init', {
         requestId: randomUUID(), body: { day: snapshot.day, installationId: id, scores: snapshot.scores }
       });
       submitting = attempt;
       uploadingKind = 'history';
+      publishSession();
       let result;
       try { result = await attempt; }
       finally {
@@ -425,6 +472,7 @@ export function startLeaderboard(orca, {
         uploadingKind = null;
       }
       if (!active()) return;
+      if (result.code !== 'banned') localUploadAt = now().getTime() + UPLOAD_INTERVAL;
       rememberUpload(result);
       recordUpload('history', result.code);
       if (['accepted', 'initialized', 'banned'].includes(result.code)) return setHistoryJob(undefined);
@@ -434,6 +482,43 @@ export function startLeaderboard(orca, {
       }
       job.next = Math.max(now().getTime() + 10_000, result.nextUploadAt ?? 0, result.lockedUntil ?? 0);
     } finally { job.running = false; }
+  }
+
+  async function manualSync(payload, days) {
+    const reply = code => ({ code, ...panelState(days) });
+    if (!token) return reply('login_required');
+    if (scheduling || submitting) return reply('upload_in_progress');
+    if (payload.action === 'sync') {
+      const day = today(), status = uploadStatus?.day === day ? uploadStatus : {};
+      const time = now().getTime();
+      if (banned) return reply('banned');
+      if (status.lockedUntil > time) return reply('locked');
+      if (status.submitted && status.tokens === null) return reply('removed');
+      if (uploadDeadline(status, dailyScore(day)) > time) {
+        manualQueued = true;
+        publishSession();
+        return reply('sync_queued');
+      }
+    }
+    const credential = token;
+    const stillSignedIn = () => token === credential && !lifetime.signal.aborted;
+    scheduling = true;
+    try {
+      const current = await readUsage();
+      if (!stillSignedIn()) return reply('upload_disabled');
+      if ((payload.day !== undefined || payload.tokens !== undefined) &&
+          (payload.day !== current.day || payload.tokens !== current.tokens)) {
+        recordUpload('manual', 'usage_changed');
+        return reply('usage_changed');
+      }
+      manualQueued = false;
+      const result = await submit(current, 'manual', stillSignedIn);
+      if (stillSignedIn()) recordUpload('manual', result.code);
+      return reply(result.code || 'unavailable');
+    } finally {
+      scheduling = false;
+      publishSession();
+    }
   }
 
   const registration = orca.panels.handle(METHOD, async payload => {
@@ -466,22 +551,14 @@ export function startLeaderboard(orca, {
         }
         return { code: 'signed_out', ...panelState(days) };
       }
-      case 'submit': {
-        const credential = token;
-        const current = await readUsage();
-        const previewChanged = (payload.day !== undefined || payload.tokens !== undefined) &&
-          (payload.day !== current.day || payload.tokens !== current.tokens);
-        const result = previewChanged
-          ? { code: 'usage_changed' } : await submit(current, 'manual', () => token === credential);
-        if (credential && token === credential) recordUpload('manual', result.code);
-        return { code: result.code || 'unavailable', ...panelState(days) };
-      }
+      case 'submit':
+      case 'sync': return manualSync(payload, days);
       default: return { code: 'invalid' };
     }
   });
   function tick() {
-    void ready.then(revokeSessions);
-    void runHistoryInitialization().catch(() => {}).then(runScheduled).catch(() => {});
+    void ready.then(() => { revokeSessions(); publishSession(); });
+    void runHistoryInitialization().catch(() => {}).then(runScheduled).catch(() => {}).finally(publishSession);
   }
   const timer = setInterval(tick, 1000);
   timer.unref?.();

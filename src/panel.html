@@ -77,14 +77,15 @@
     .panel-summary { min-width: 0; }
     h1 { margin: 0; font-size: 18px; line-height: 1.4; letter-spacing: -.3px; font-weight: 750; }
     .title-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; }
-    .language-picker { position: relative; min-width: 0; }
+    .language-picker { position: relative; flex: 0 1 156px; min-width: 0; }
     .language-toggle, .language-option {
       display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 32px;
       padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px;
       background: var(--surface); color: var(--ink); cursor: pointer;
     }
-    .language-toggle { max-width: 100%; }
+    .language-toggle { width: 100%; }
     .language-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .language-toggle .language-name { flex: 1; min-width: 0; text-align: start; }
     .language-flag { flex: none; width: 20px; height: 14px; object-fit: contain; }
     .language-toggle svg { flex: none; width: 12px; height: 12px; color: var(--muted); }
     .language-menu {
@@ -132,10 +133,14 @@
     .ladder-control { min-height: 36px; padding-inline: 12px; font-size: 13px; font-weight: 700; }
     .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
     .ladder-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
-    .ladder-sync { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
-    .ladder-sync .ladder-note { min-width: 0; overflow-wrap: anywhere; }
+    .ladder-sync {
+      display: grid; grid-template-columns: auto minmax(0, 1fr) minmax(0, 1fr);
+      align-items: center; gap: 7px; margin-top: 8px; font-variant-numeric: tabular-nums;
+    }
+    .ladder-sync .ladder-note { margin: 0; min-width: 0; overflow-wrap: anywhere; }
     .ladder-sync-result { margin-inline-start: auto; text-align: right; }
-    .ladder-sync-result[data-result="failed"] { color: var(--error); }
+    .ladder-sync-error { color: var(--error); overflow-wrap: anywhere; }
+    .ladder-sync .is-queued { color: var(--blue); }
     .ladder-actions .ladder-note { margin: 0; }
     .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .ladder-status:empty, .ladder-mine:empty { display: none; }
@@ -446,9 +451,13 @@
             </dl>
           </div>
           <div class="ladder-sync">
+            <button class="refresh ladder-refresh" id="ladder-sync-now" type="button" data-i18n-aria-label="sync-now" data-i18n-title="sync-now">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 18H6a4 4 0 0 1-.4-8 6 6 0 0 1 11.5-1.7A4.8 4.8 0 0 1 18 18h-1M12 19v-8m-3 3 3-3 3 3"/></svg>
+            </button>
             <p class="ladder-note" id="ladder-sync-countdown" data-localized-text hidden></p>
-            <p class="ladder-note ladder-sync-result" id="ladder-sync-result" role="status" data-localized-text hidden></p>
+            <p class="ladder-note ladder-sync-result" id="ladder-sync-result" data-localized-text></p>
           </div>
+          <p class="ladder-note ladder-sync-error" id="ladder-sync-error" role="status" data-localized-text hidden></p>
         </div>
         <p class="ladder-status" id="ladder-status" role="status" data-localized-text></p>
         <p class="ladder-note" id="ladder-logout-pending" role="status" data-localized-text hidden></p>
@@ -732,6 +741,27 @@
       };
     })();
     const t = locale.t;
+    function updateList(container, items, previous, keyOf, create) {
+      const next = new Map();
+      let position = container.firstChild;
+      const counts = new Map();
+      for (const item of items) {
+        const signature = keyOf(item);
+        const occurrence = counts.get(signature) ?? 0;
+        counts.set(signature, occurrence + 1);
+        const key = signature + '/' + occurrence;
+        const node = previous.get(key) ?? create(item);
+        if (node !== position) container.insertBefore(node, position);
+        position = node.nextSibling;
+        next.set(key, node);
+      }
+      while (position) {
+        const unused = position;
+        position = position.nextSibling;
+        unused.remove();
+      }
+      return next;
+    }
     const formatTokenMB = tokens => {
       if (!Number.isFinite(tokens) || tokens < 0) return '—';
       const options = tokens > 0 && tokens < 1_000_000
@@ -787,6 +817,8 @@
       let revision = 0;
       let disposed = false;
       let drawnRecords = '';
+      let recordNodes = new Map(), currentFrame;
+      let drawnWarnings;
       let resetScroll = false;
       document.addEventListener('DOMContentLoaded', async () => {
         await locale.ready;
@@ -920,6 +952,8 @@
         return AGENT_LABELS[provider || current?.activeSession?.provider] ?? '';
       }
       let usageSummary = null, usageRange = 'today', usageProblem = false, usageTimer = null;
+      let usagePending, usageFrame, drawnUsage, drawnHeat, heatLayout, heatCells = [], usageRevision = 0;
+      const usageGroup = byId('usage');
       function formatCount(value) {
         if (!numeric(value)) return '—';
         return value >= 1e4 ? locale.number(value, { notation: 'compact', maximumFractionDigits: 2 }) : number(value);
@@ -958,6 +992,7 @@
         return item;
       }
       function renderUsage() {
+        if (disposed || usageGroup.hidden) return;
         const range = usageSummary?.windows?.[usageRange] ?? null;
         for (const tab of document.querySelectorAll('[data-range]')) {
           tab.setAttribute('aria-selected', String(tab.dataset.range === usageRange));
@@ -965,8 +1000,13 @@
         byId('war-tokens').textContent = range ? formatTokenMB(range.tokens) : '—';
         byId('war-requests').textContent = range ? formatCount(range.requests) : '—';
         const list = Array.isArray(range?.rows) ? range.rows : [];
-        const max = list.reduce((top, row) => Math.max(top, numeric(row.tokens) ? row.tokens : 0), 0);
-        byId('war-rows').replaceChildren(...list.map(row => usageRow(row, max)));
+        const signature = JSON.stringify([usageRange, list, range?.speeds]);
+        if (signature !== drawnUsage) {
+          drawnUsage = signature;
+          const max = list.reduce((top, row) => Math.max(top, numeric(row.tokens) ? row.tokens : 0), 0);
+          byId('war-rows').replaceChildren(...list.map(row => usageRow(row, max)));
+          renderSpeeds(range);
+        }
         byId('war-empty').hidden = !usageSummary || list.length > 0;
         const notes = [];
         if (usageProblem) notes.push(t('usage-unavailable'));
@@ -977,7 +1017,6 @@
         if (range && numeric(range.hiddenRows) && range.hiddenRows > 0) notes.push(t('model-list-truncated', number(range.hiddenRows)));
         byId('war-note').textContent = notes.join(' · ');
         byId('war-note').hidden = notes.length === 0;
-        renderSpeeds(range);
         renderHeatmap();
       }
       // 模型均速: mean per-request TPS per model over the selected window, fastest first; ranking comes from tps.summary.
@@ -1030,14 +1069,22 @@
         byId('speed-note').hidden = notes.length === 0;
       }
       async function loadUsage() {
-        if (!bridge || disposed || typeof bridge.request !== 'function') return;
+        if (!bridge || disposed || usagePending || typeof bridge.request !== 'function') return;
+        usagePending = true;
+        const requestedAt = usageRevision;
         try {
-          usageSummary = await bridge.request('tps.summary', undefined, { signal: lifetime.signal, timeoutMs: 30000 });
-          usageProblem = false;
+          const result = await bridge.request('tps.summary', undefined, { signal: lifetime.signal, timeoutMs: 30000 });
+          if (requestedAt === usageRevision) { usageSummary = result; usageProblem = false; }
         } catch {
-          if (!disposed) usageProblem = true;
+          if (!disposed && requestedAt === usageRevision) usageProblem = true;
+        } finally {
+          usagePending = false;
         }
-        if (!disposed) renderUsage();
+        scheduleUsage();
+      }
+      function scheduleUsage() {
+        if (disposed || usageGroup.hidden || usageFrame !== undefined) return;
+        usageFrame = requestAnimationFrame(() => { usageFrame = undefined; renderUsage(); });
       }
       for (const tab of document.querySelectorAll('[data-range]')) {
         tab.addEventListener('click', () => { usageRange = tab.dataset.range; renderUsage(); });
@@ -1048,9 +1095,16 @@
       const dayLabel = date => locale.date(date, { dateStyle: 'full' });
       function renderHeatmap() {
         const grid = byId('heat-grid'), months = byId('heat-months');
-        const byDay = new Map((usageSummary?.daily ?? []).map(entry => [entry.day, entry]));
         const today = new Date();
         today.setHours(0, 0, 0, 0);
+        const layout = localKey(today);
+        const daily = usageSummary?.daily ?? [];
+        const signature = JSON.stringify([layout, Boolean(usageSummary), daily]);
+        if (signature === drawnHeat) return;
+        drawnHeat = signature;
+        const rebuild = layout !== heatLayout;
+        heatLayout = layout;
+        const byDay = new Map(daily.map(entry => [entry.day, entry]));
         const start = new Date(today);
         start.setDate(today.getDate() - (HEAT_DAYS - 1));
         start.setDate(start.getDate() - start.getDay());
@@ -1069,16 +1123,20 @@
             const entry = byDay.get(localKey(date));
             const tokens = future ? 0 : (numeric(entry?.tokens) ? entry.tokens : 0);
             if (!future && tokens > 0) { activeDays += 1; total += tokens; }
-            const cell = document.createElement('span');
-            cell.className = `heat-cell lv${levelOf(tokens)}${future ? ' future' : ''}`;
-            cell.dataset.tokens = String(tokens);
-            cell.dataset.requests = String(numeric(entry?.requests) ? entry.requests : 0);
-            cell.dataset.label = dayLabel(date);
-            cell.setAttribute('aria-label', tokens > 0
-              ? t('heatmap-day-usage', cell.dataset.label, formatTokenMB(tokens), formatCount(Number(cell.dataset.requests)))
-              : t('heatmap-day-empty', cell.dataset.label));
+            const cell = rebuild ? document.createElement('span') : heatCells[cells.length];
+            const style = `heat-cell lv${levelOf(tokens)}${future ? ' future' : ''}`;
+            const requests = numeric(entry?.requests) ? entry.requests : 0;
+            if (cell.className !== style) cell.className = style;
+            if (rebuild || cell.dataset.tokens !== String(tokens) || cell.dataset.requests !== String(requests)) {
+              cell.dataset.tokens = String(tokens);
+              cell.dataset.requests = String(requests);
+              if (rebuild) cell.dataset.label = dayLabel(date);
+              cell.setAttribute('aria-label', tokens > 0
+                ? t('heatmap-day-usage', cell.dataset.label, formatTokenMB(tokens), formatCount(requests))
+                : t('heatmap-day-empty', cell.dataset.label));
+            }
             cells.push(cell);
-            if (weekday === 0 && !future && date.getMonth() !== lastMonth) {
+            if (rebuild && weekday === 0 && !future && date.getMonth() !== lastMonth) {
               lastMonth = date.getMonth();
               const label = document.createElement('span');
               label.textContent = locale.date(date, { month: 'short' });
@@ -1087,8 +1145,11 @@
             }
           }
         }
-        grid.replaceChildren(...cells);
-        months.replaceChildren(...labels);
+        if (rebuild) {
+          heatCells = cells;
+          grid.replaceChildren(...cells);
+          months.replaceChildren(...labels);
+        }
         byId('heat-total').textContent = usageSummary ? t('yearly-usage-total', formatTokenMB(total), number(activeDays)) : t('calculating-usage');
       }
       const heatTip = byId('heat-tip');
@@ -1110,13 +1171,15 @@
       });
       byId('heat-grid').addEventListener('pointerleave', () => { heatTip.hidden = true; });
       byId('heat-scroll').addEventListener('scroll', () => { heatTip.hidden = true; }, { passive: true });
-      const usageGroup = byId('usage');
       usageGroup.addEventListener('tps-view-opened', () => {
+        renderUsage();
         const scroller = byId('heat-scroll');
         scroller.scrollLeft = scroller.scrollWidth;   // open on the latest weeks, as GitHub does
+        if (!usageSummary) void loadUsage();
       });
+      ui['current-data'].addEventListener('tps-view-opened', render);
       function render() {
-        if (disposed) return;
+        if (disposed || ui['current-data'].hidden) return;
         const records = (current?.records ?? []).filter(record => record && typeof record === 'object')
           .slice().sort((a, b) => (numeric(b.completedAt) ? b.completedAt : 0) - (numeric(a.completedAt) ? a.completedAt : 0)).slice(0, 100);
         const working = busy || Boolean(current?.loading);
@@ -1131,20 +1194,22 @@
         ui.error.textContent = problem ? t(problem) : '';
         ui.loading.hidden = !working;
         ui.loading.textContent = current ? t('updating-stats') : t('reading-conversation');
-        const warnings = document.createDocumentFragment();
-        for (const text of (current?.warnings ?? []).slice(0, 6)) {
-          const warning = document.createElement('div');
-          warning.className = 'message message-warning';
-          warning.setAttribute('data-localized-text', '');
-          warning.textContent = String(text).slice(0, 1000);
-          warnings.append(warning);
+        const warnings = (current?.warnings ?? []).slice(0, 6);
+        const warningSignature = JSON.stringify(warnings);
+        if (warningSignature !== drawnWarnings) {
+          drawnWarnings = warningSignature;
+          ui.warnings.replaceChildren(...warnings.map(text => {
+            const warning = document.createElement('div');
+            warning.className = 'message message-warning';
+            warning.setAttribute('data-localized-text', '');
+            warning.textContent = String(text).slice(0, 1000);
+            return warning;
+          }));
         }
-        ui.warnings.replaceChildren(warnings);
         const signature = JSON.stringify([current?.instanceId ?? null, current?.generation ?? null, records]);
         if (signature !== drawnRecords) {
-          const fragment = document.createDocumentFragment();
-          for (const record of records) fragment.append(recordCard(record));
-          ui.records.replaceChildren(fragment);
+          recordNodes = updateList(ui.records, records, recordNodes,
+            record => JSON.stringify([current?.activeSession?.provider, record]), recordCard);
           drawnRecords = signature;
         }
         ui.records.hidden = records.length === 0;
@@ -1156,6 +1221,10 @@
           resetScroll = false;
           if (!ui['current-data'].hidden) window.scrollTo(0, 0);
         }
+      }
+      function scheduleCurrent() {
+        if (disposed || ui['current-data'].hidden || currentFrame !== undefined) return;
+        currentFrame = requestAnimationFrame(() => { currentFrame = undefined; render(); });
       }
       function accept(next, source) {
         if (!next || typeof next.instanceId !== 'string' || !next.instanceId || !Number.isFinite(next.generation) || !Array.isArray(next.records)) return false;
@@ -1192,18 +1261,29 @@
         ui.refresh.removeEventListener('click', refresh);
         for (const subscription of subscriptions) subscription?.dispose();
         clearInterval(usageTimer);
+        cancelAnimationFrame(currentFrame);
+        cancelAnimationFrame(usageFrame);
       }
       ui.refresh.addEventListener('click', refresh);
       document.addEventListener('tps-language-changed', () => {
         drawnRecords = '';
+        recordNodes.clear();
+        drawnUsage = drawnHeat = heatLayout = undefined;
         heatTip.hidden = true;
-        render();
-        renderUsage();
+        scheduleCurrent();
+        scheduleUsage();
       }, { signal: lifetime.signal });
       window.addEventListener('pagehide', cleanup, { once: true });
       if (bridge && typeof bridge.request === 'function' && typeof bridge.on === 'function') {
         subscriptions.push(bridge.on('tps.changed', next => {
-          if (!disposed && accept(next, 'push')) { revision += 1; render(); }
+          if (!disposed && accept(next, 'push')) { revision += 1; scheduleCurrent(); }
+        }));
+        subscriptions.push(bridge.on('tps.usage.changed', next => {
+          if (disposed) return;
+          usageRevision += 1;
+          usageSummary = next;
+          usageProblem = false;
+          scheduleUsage();
         }));
         if (typeof window.orca.on === 'function') {
           subscriptions.push(window.orca.on('theme', theme => {
@@ -1214,7 +1294,7 @@
         }
         void request('tps.state');
         void loadUsage();
-        usageTimer = setInterval(() => void loadUsage(), USAGE_REFRESH_MS);
+        usageTimer = setInterval(() => { if (!usageGroup.hidden) void loadUsage(); }, USAGE_REFRESH_MS);
       } else {
         problem = 'open-in-orca';
         render();
@@ -1254,10 +1334,13 @@
       };
       const messageFor = code => Object.hasOwn(messages, code) ? t(messages[code]) : undefined;
       let model, session, pendingLogin, retryLogin, rankDays = 1;
-      const cachedRankings = new Map(), refreshing = new Set();
-      let busy = false, restoringSession = false;
+      const cachedRankings = new Map(), summaryQueue = new Set(), rankRequests = new Map();
+      const RANK_REFRESH_MS = 5000;
+      let rankingPending, sessionPushVersion = 0, rankingSubscription;
+      let busy = false, restoringSession = false, manualSyncPending = false;
       let revision = 0, drawnRows = '', renderedDay = '', loginProblem = '', messageCode = '';
       let summaryAccount = '', summaryUpload = null;
+      let rankingNodes = new Map(), leaderboardFrame;
 
       async function request(action, payload = {}) {
         try {
@@ -1297,10 +1380,10 @@
       function renderRows(rows, username) {
         const signature = JSON.stringify([rankDays, username, rows]);
         if (signature === drawnRows) return;
-        drawnRows = signature;
-        const list = document.createDocumentFragment();
         const period = periods.find(entry => entry.days === rankDays);
-        for (const row of rows) {
+        drawnRows = signature;
+        const keyOf = row => JSON.stringify([rankDays, username === row.username, row]);
+        rankingNodes = updateList(element('rows'), rows, rankingNodes, keyOf, row => {
           const item = document.createElement('li');
           if (username && row.username === username) item.classList.add('ladder-self');
           const rank = document.createElement('span'), name = document.createElement('span'), user = document.createElement('div');
@@ -1323,9 +1406,8 @@
           time.textContent = rankDays === 1 ? uploaded : t('last-upload-at', uploaded);
           time.dateTime = new Date(row.submittedAt).toISOString();
           item.append(rank, user, total, time);
-          list.append(item);
-        }
-        element('rows').replaceChildren(list);
+          return item;
+        });
       }
 
       function renderAccount(username, account) {
@@ -1354,9 +1436,17 @@
 
       function renderSyncCountdown(snapshot, signedIn, time) {
         const note = element('sync-countdown');
+        const button = element('sync-now');
+        const uploading = manualSyncPending || Boolean(snapshot?.uploading);
+        const queued = Boolean(snapshot?.manualQueued);
+        button.disabled = !signedIn || busy || uploading || queued || Boolean(snapshot?.board?.banned) || snapshot?.board?.lockedUntil > time;
+        button.classList.toggle('is-queued', queued);
+        const queuedNote = queued ? t('sync-queued') : '';
+        if (button.title !== (queuedNote || t('sync-now'))) button.title = queuedNote || t('sync-now');
+        if (note.title !== queuedNote) note.title = queuedNote;
         let text = '';
         if (signedIn && !snapshot?.board?.banned) {
-          if (snapshot.uploading) text = t('sync-in-progress');
+          if (uploading) text = t('sync-in-progress');
           else if (Number.isFinite(snapshot.nextAutomaticAt)) {
             const seconds = Math.ceil((snapshot.nextAutomaticAt - time) / 1000);
             if (seconds > 0) {
@@ -1367,25 +1457,27 @@
             } else text = t('sync-waiting');
           }
         }
-        note.hidden = !text;
-        if (note.textContent !== text) note.textContent = text;
+        if (note.textContent !== (text || '—')) note.textContent = text || '—';
+        note.hidden = false;
       }
 
-      function renderSyncResult(record) {
+      function renderSyncResult(snapshot) {
         const note = element('sync-result');
-        note.hidden = !Number.isFinite(record?.at);
-        if (note.hidden) return;
-        const succeeded = ['accepted', 'initialized', 'duplicate'].includes(record.code);
-        const at = shortClock(record.at);
-        const text = succeeded ? t('last-sync-time', at)
-          : t('last-sync-failed', at, messageFor(record.code) ?? t('sync-failure-unknown'));
-        note.dataset.result = succeeded ? 'success' : 'failed';
-        note.title = clock(record.at);
+        const lastAt = snapshot?.lastSyncAt;
+        const validTime = Number.isFinite(lastAt);
+        const text = t('last-sync-time', validTime ? shortClock(lastAt) : '—');
+        note.title = validTime ? clock(lastAt) : '';
         if (note.textContent !== text) note.textContent = text;
+        const failure = element('sync-error'), record = snapshot?.lastUpload;
+        const failed = Number.isFinite(record?.at) && !['accepted', 'initialized', 'duplicate'].includes(record.code);
+        const error = failed ? t('last-sync-failed', shortClock(record.at), messageFor(record.code) ?? t('sync-failure-unknown')) : '';
+        if (failure.textContent !== error) failure.textContent = error;
+        failure.hidden = !failed;
       }
 
       function render(code = messageCode) {
         messageCode = code;
+        if (group.hidden) return;
         renderedDay = boardDay();
         const time = Date.now();
         const { board = {} } = model ?? {};
@@ -1438,7 +1530,12 @@
         renderRows(ranking?.rows ?? [], username);
         if (signedIn) renderAccount(username, account);
         renderSyncCountdown(snapshot, signedIn, time);
-        renderSyncResult(signedIn ? snapshot.lastUpload : null);
+        renderSyncResult(signedIn ? snapshot : null);
+      }
+
+      function scheduleRender() {
+        if (group.hidden || lifetime.signal.aborted || leaderboardFrame !== undefined) return;
+        leaderboardFrame = requestAnimationFrame(() => { leaderboardFrame = undefined; render(); });
       }
 
       async function showCache(days = rankDays) {
@@ -1448,18 +1545,20 @@
         const cachedRanking = cachedRankings.get(days);
         if (cachedRanking?.day === ranking.day && cachedRanking.updatedAt >= ranking.updatedAt) return;
         cachedRankings.set(days, ranking);
-        if (!group.hidden) render();
+        scheduleRender();
       }
 
       async function refreshSession() {
         if (restoringSession || busy || lifetime.signal.aborted) return;
         restoringSession = true;
         const requestedAt = revision;
+        const requestedVersion = sessionPushVersion;
         try {
           const result = await request('session');
-          if (lifetime.signal.aborted || revision !== requestedAt || typeof result.signedIn !== 'boolean') return;
+          if (lifetime.signal.aborted || revision !== requestedAt || requestedVersion !== sessionPushVersion ||
+              typeof result.signedIn !== 'boolean') return;
           session = result;
-          render();
+          scheduleRender();
         } finally { restoringSession = false; }
       }
 
@@ -1471,9 +1570,9 @@
         return true;
       }
 
-      function showState(result, days = rankDays) {
+      function showState(result, days = rankDays, updateSession = true) {
         model = result.board ? result : { ...model, days, board: { code: result.code } };
-        if (typeof result.signedIn === 'boolean') session = result;
+        if (typeof result.signedIn === 'boolean' && (updateSession || !session)) session = result;
         cacheRanking(result, days);
         render(result.code ?? '');
         showSummaries();
@@ -1491,31 +1590,49 @@
         if (first || uploaded !== null) summaryUpload = uploaded;
         for (const { days } of periods) {
           if (days === rankDays) continue;
-          if (justUploaded) void refresh(days);
+          if (justUploaded) summaryQueue.add(days);
           else void showCache(days).then(() => {
-            if (summaryAccount === key && cachedRankings.get(days)?.day !== day) void refresh(days);
+            if (summaryAccount === key && cachedRankings.get(days)?.day !== day) summaryQueue.add(days);
           });
         }
       }
 
-      async function refresh(days = rankDays) {
+      async function refresh(days = rankDays, force = false) {
         if (group.hidden || lifetime.signal.aborted) return;
         if (renderedDay !== boardDay()) render('');
-        if (busy || refreshing.has(days)) return;
-        const requestedAt = revision;
-        refreshing.add(days);
-        try {
+        if (busy) return;
+        if (rankingPending) {
+          if (!force) return;
+          const running = rankingPending;
+          try { await running.promise; } catch { /* A manual refresh may retry. */ }
+          if (running.days !== days || !running.succeeded) return refresh(days, true);
+          return;
+        }
+        const previous = rankRequests.get(days);
+        if (!force && previous?.day === renderedDay && Date.now() < previous.next) return;
+        const requestedAt = revision, day = renderedDay;
+        const pending = { days, succeeded: false, promise: undefined };
+        summaryQueue.delete(days);
+        rankingPending = pending;
+        pending.promise = (async () => {
           const result = await request('state', { days });
           if (lifetime.signal.aborted) return;
+          pending.succeeded = Array.isArray(result.board?.rows);
+          const retry = pending.succeeded ? 0 : Math.min((previous?.retry || 500) * 2, 30_000);
+          rankRequests.set(days, { day, retry, next: Date.now() + (retry || RANK_REFRESH_MS) });
+          if (!pending.succeeded && days !== rankDays) summaryQueue.add(days);
           if (days !== rankDays || revision !== requestedAt) {
-            if (cacheRanking(result, days)) render();
-          } else showState(result, days);
-        } finally { refreshing.delete(days); }
+            if (cacheRanking(result, days)) scheduleRender();
+          } else showState(result, days, false);
+        })().finally(() => { rankingPending = undefined; });
+        return pending.promise;
       }
 
       function showCachedRanking() {
         render('');
-        void showCache();
+        void showCache().then(() => refresh());
+        if (!session) void refreshSession();
+        showSummaries();
       }
 
       async function logout() {
@@ -1569,13 +1686,27 @@
       group.addEventListener('tps-view-opened', showCachedRanking);
       document.addEventListener('tps-language-changed', () => {
         drawnRows = '';
+        rankingNodes.clear();
         for (const { days } of periods) delete element('user-badge-' + days).dataset.place;
         render();
       }, { signal: lifetime.signal });
       element('update').addEventListener('click', async () => {
         const button = element('update');
         button.classList.add('is-busy');
-        try { await refresh(); } finally { button.classList.remove('is-busy'); }
+        try { await refresh(rankDays, true); } finally { button.classList.remove('is-busy'); }
+      });
+      element('sync-now').addEventListener('click', async () => {
+        if (element('sync-now').disabled) return;
+        const requestedAt = revision;
+        manualSyncPending = true;
+        render('');
+        const result = await request('sync');
+        manualSyncPending = false;
+        if (lifetime.signal.aborted) return;
+        if (revision !== requestedAt) { scheduleRender(); return; }
+        if (typeof result.signedIn === 'boolean') session = result;
+        render(['locked', 'banned', 'removed'].includes(result.code) || typeof result.signedIn !== 'boolean' ? result.code : '');
+        showSummaries();
       });
       element('login').addEventListener('click', async () => {
         if (busy || pendingLogin) return;
@@ -1624,6 +1755,13 @@
         if (attempt) await request('cancel', { loginUrl: attempt.loginUrl });
       });
       element('logout').addEventListener('click', () => void logout());
+      rankingSubscription = bridge.on?.('tps.leaderboard.session', next => {
+        if (lifetime.signal.aborted || typeof next?.signedIn !== 'boolean') return;
+        sessionPushVersion += 1;
+        session = next;
+        scheduleRender();
+        showSummaries();
+      });
       void refreshSession();
       for (const { days } of periods) void showCache(days);
       const interval = setInterval(() => {
@@ -1631,10 +1769,17 @@
         const snapshot = session ?? model;
         renderSyncCountdown(snapshot, snapshot?.signedIn ?? snapshot?.board?.authenticated, Date.now());
         void refresh();
-        void refreshSession();
+        if (!rankingPending) {
+          for (const days of summaryQueue) {
+            void refresh(days);
+            if (rankingPending) break;
+          }
+        }
       }, 1000);
       window.addEventListener('pagehide', () => {
         lifetime.abort();
+        rankingSubscription?.dispose();
+        cancelAnimationFrame(leaderboardFrame);
         clearTimeout(retryLogin);
         clearInterval(interval);
       }, { once: true });
