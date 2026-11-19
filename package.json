@@ -1,7 +1,7 @@
 {
   "name": "orca-tps-stats",
-  "version": "1.6.0",
-  "description": "Per-request TPS, TTFT, and cache hit rate statistics plugin for Orca IDE (Claude Code, Codex, OpenCode, Pi), aligned with CC Switch calculation rules.",
+  "version": "1.6.1",
+  "description": "Live request speed, personal token usage, and GitHub leaderboards with multi-device totals for Orca IDE.",
   "private": true,
   "type": "module",
   "author": {
