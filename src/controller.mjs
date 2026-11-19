@@ -54,6 +54,7 @@ const TRANSIENT_PAGE_PATTERNS = [
 
 export function createTpsController(orca, {
   readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 250,
+  livePollMs = focusPollMs, backgroundPollMs = pollMs, backgroundLimit = 2, watchWorkspace = false,
   holdActivityMs = 120_000, onTargetChange = () => {}, onOpenTargets = () => {}, cache, locales
 } = {}) {
   const t = locales?.t ?? sourceMessage;
@@ -64,6 +65,7 @@ export function createTpsController(orca, {
   let emptyMessage = sourceMessage('notice.detecting-channel');
   let stopped = false, started = false;
   let contextPending = null, loadTask = null, timer = null;
+  let contextDueAt = -Infinity, nextContext = false;
   let lastReadAt = -Infinity, lastStatus = '', lastSnapshot = '', publishSequence = 0;
   let holdUntil = -Infinity, dataStamp = '';
   let statusQueue = Promise.resolve(), openTargets = [];
@@ -237,9 +239,9 @@ export function createTpsController(orca, {
   }
 
   function refreshOpenChannels() {
-    if (!cache || stopped || backgroundReads.size >= 2 || !openTargets.length) return;
+    if (!cache || stopped || backgroundReads.size >= backgroundLimit || !openTargets.length) return;
     let candidate = null, oldest = Infinity;
-    const threshold = now() - pollMs;
+    const threshold = now() - backgroundPollMs;
     for (const open of openTargets) {
       const channel = targetKey(open), last = channelReadAt.get(channel) ?? -Infinity;
       if (channel !== key && !projectReads.has(channel) && last <= threshold && last < oldest) {
@@ -299,11 +301,24 @@ export function createTpsController(orca, {
   async function checkActive({ force = false } = {}) {
     if (stopped) return state();
     await syncActive();
+    return checkLive(force);
+  }
+
+  function checkLive(force) {
     const result = loadCurrent(force);
     refreshOpenChannels();
     return result;
   }
   const refresh = () => checkActive({ force: true });
+
+  async function poll() {
+    if (stopped || contextPending) return;
+    if (now() >= contextDueAt || nextContext) {
+      nextContext = false;
+      contextDueAt = now() + focusPollMs;
+      await checkActive();
+    } else await checkLive(false);
+  }
 
   async function start({ background = false } = {}) {
     if (started) return;
@@ -319,8 +334,15 @@ export function createTpsController(orca, {
       orca.commands.register('tps.refresh', refresh)
     );
     const firstRefresh = refresh();
-    if (focusPollMs > 0) {
-      timer = setInterval(() => { void checkActive().catch(() => orca.log(t('notice.background-refresh-failed'))); }, focusPollMs);
+    if (watchWorkspace && orca.events?.on) {
+      registrations.push(orca.events.on('workspace.changed', () => {
+        nextContext = true;
+        void poll().catch(() => orca.log(t('notice.background-refresh-failed')));
+      }));
+    }
+    if (livePollMs > 0) {
+      contextDueAt = now() + focusPollMs;
+      timer = setInterval(() => { void poll().catch(() => orca.log(t('notice.background-refresh-failed'))); }, livePollMs);
       timer.unref?.();
     }
     if (!background) await firstRefresh;

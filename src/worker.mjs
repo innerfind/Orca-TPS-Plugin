@@ -1,18 +1,16 @@
 import { createLocalePreferences } from './locales.mjs';
-import { createLiveSessionReader, discoverUsageUnits } from './data.mjs';
-import { readActiveConversation } from './active-conversation.mjs';
+import { createComputation } from './computation.mjs';
 import { createTpsController } from './controller.mjs';
 import { createRemoteChannelReader, createRemoteUsageReader } from './remote-channel.mjs';
 import { createChannelCache } from './channel-cache.mjs';
-import { createUsageIndex, MAX_WINDOW_DAYS } from './usage-summary.mjs';
+import { BACKFILL_BYTES, BACKFILL_UNITS, createUsageIndex, MAX_WINDOW_DAYS } from './usage-summary.mjs';
 import { startLeaderboard } from './leaderboard.mjs';
 
-// Backfill runs quickly while files are pending; once every unit is current, refresh slowly.
-const BACKFILL_DELAY_MS = 15_000, IDLE_DELAY_MS = 60_000, FIRST_DELAY_MS = 3_000;
+const BACKFILL_DELAY_MS = 250, DISCOVERY_MS = 15_000, IDLE_DELAY_MS = 60_000, FIRST_DELAY_MS = 3_000;
 const PANEL_VIEW_KEY = 'panel-view';
 const PANEL_VIEWS = new Set(['current-data', 'usage', 'leaderboard']);
 
-let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, stopLeaderboard, stopPanelView, running = false;
+let controller, remote, computation, cache, usage, remoteUsage, usageAbort, timer, handler, stopLeaderboard, stopPanelView, running = false;
 let locales, localeRegistration;
 
 export default async function activate(orca) {
@@ -23,39 +21,55 @@ export default async function activate(orca) {
     ? language.response(true)
     : language.select(payload.code, () => { void controller?.refreshLocale(); }));
   stopPanelView = registerPanelView(orca, language.t);
-  const remoteReader = remote = createRemoteChannelReader(orca, { t: language.t });
-  const localReader = local = createLiveSessionReader();
+  const compute = computation = createComputation();
+  const remoteOptions = {
+    t: language.t,
+    lookupSsh: ids => compute.call('sshTargets', ids),
+    decode: body => compute.call('remoteReply', body)
+  };
+  const remoteReader = remote = createRemoteChannelReader(orca, remoteOptions);
   const channelCache = cache = createChannelCache(orca.storage);
   controller = createTpsController(orca, {
     cache: channelCache, locales: language,
-    pollMs: 250,
-    readActive: () => readActiveConversation({ includeRemote: true, includeOpen: true }),
+    pollMs: 250, livePollMs: 250, focusPollMs: 1000,
+    backgroundPollMs: 5000, backgroundLimit: 1, watchWorkspace: true,
+    readActive: () => compute.call('active', { includeRemote: true, includeOpen: true }),
     readSession: (target, options) => target.executionHostId
       ? remoteReader.read(target, options)
-      : localReader.read(target, options),
+      : compute.call('live', target, options),
     onOpenTargets: remoteReader.setTargets
   });
   await controller.start({ background: true });
-  const history = remoteUsage = createRemoteUsageReader(orca, { t: language.t });
+  const history = remoteUsage = createRemoteUsageReader(orca, remoteOptions);
   usageAbort = new AbortController();
-  usage = createUsageIndex({
+  let discovery, discoveryKey, discoveryAt = 0;
+  const index = usage = createUsageIndex({
     storage: orca.storage,
+    budgetBytes: BACKFILL_BYTES,
+    maxUnits: BACKFILL_UNITS,
     leaderboard: true,
     rankDays: MAX_WINDOW_DAYS,
     async discover(cutoffMs, rankDay, rankFrom) {
-      const [localUnits, remoteUnits] = await Promise.all([
-        discoverUsageUnits(cutoffMs, { rankDay, rankFrom }), history.discover(cutoffMs, rankDay, rankFrom)
-      ]);
-      return { ...remoteUnits, descriptors: [...localUnits, ...remoteUnits.descriptors] };
+      const key = `${cutoffMs}/${rankDay}/${rankFrom}`;
+      if (!discovery || discoveryKey !== key || Date.now() - discoveryAt >= DISCOVERY_MS) {
+        await history.finish();
+        const localUnits = await compute.call('discover', cutoffMs, { rankDay, rankFrom });
+        const remoteUnits = await history.discover(cutoffMs, rankDay, rankFrom);
+        const descriptors = localUnits.descriptors.map(unit => ({ ...unit, read: () => compute.call('usage', unit.key, unit.stamp) }));
+        discovery = { ...remoteUnits, localComplete: localUnits.complete, descriptors: descriptors.concat(remoteUnits.descriptors) };
+        discoveryAt = Date.now();
+        discoveryKey = key;
+      }
+      return discovery;
     },
     log: message => orca.log(language.notice(message))
   });
-  void usage.ready();
-  handler = orca.panels.handle('tps.summary', async () => {
-    await usage.ready();
-    return usage.summary();
+  let usageReady = false;
+  handler = orca.panels.handle('tps.summary', () => usageReady ? index.summary() : null);
+  void index.ready().then(() => {
+    usageReady = true;
+    if (usage === index) publishUsage(orca, index);
   });
-  const index = usage;
   try {
     stopLeaderboard = startLeaderboard(orca, {
       async readUsage() {
@@ -98,18 +112,23 @@ function schedule(orca, delay) {
   timer = setTimeout(() => void tick(orca), delay);
 }
 
+function publishUsage(orca, index) {
+  try { orca.panels.post('tps.usage.changed', index.summary()); }
+  catch { /* The next panel request can still read the cached summary. */ }
+}
+
 async function tick(orca) {
   if (!running) return;
-  const index = usage, history = remoteUsage, signal = usageAbort.signal;
-  let pending = 0;
+  const index = usage, signal = usageAbort.signal;
+  let delay = DISCOVERY_MS;
   try {
-    ({ pending } = await index.refresh({ signal }));
+    const { pending } = await index.refresh({ signal });
+    if (!signal.aborted) publishUsage(orca, index);
+    delay = index.hasBackfill() ? BACKFILL_DELAY_MS : pending ? DISCOVERY_MS : IDLE_DELAY_MS;
   } catch (error) {
     if (!signal.aborted) orca.log(locales.t('notice.usage-refresh-failed', error?.message ?? 'unknown'));
-  } finally {
-    await history.finish();
   }
-  if (running && usage === index) schedule(orca, pending > 0 ? BACKFILL_DELAY_MS : IDLE_DELAY_MS);
+  if (running && usage === index) schedule(orca, delay);
 }
 
 export async function deactivate() {
@@ -135,8 +154,9 @@ export async function deactivate() {
   remoteUsage = undefined;
   const remoteReader = remote;
   remote = undefined;
-  local?.close();
-  local = undefined;
+  const compute = computation;
+  computation = undefined;
+  await compute?.close();
   const channelCache = cache;
   cache = undefined;
   await Promise.all([remoteReader?.dispose(), history?.dispose(), channelCache?.flush(), panelViewWrite, languageWrite]);

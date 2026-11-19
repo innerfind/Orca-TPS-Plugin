@@ -62,6 +62,7 @@
   "pluginApi": 1,
   "main": "src/worker.mjs",
   "contributes": {
+    "events": [{ "on": "workspace.changed" }],
     "panels": [
       {
         "id": "history",

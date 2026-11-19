@@ -241,4 +241,6 @@
   <message id="next-sync-countdown">اگلی ہم آہنگی {0}</message>
   <message id="sync-in-progress">ہم آہنگی جاری ہے…</message>
   <message id="sync-waiting">ہم آہنگی کا انتظار…</message>
+  <message id="sync-now">ابھی ہم آہنگ کریں</message>
+  <message id="sync-queued">اگلی ہم آہنگی کے لیے قطار میں</message>
 </messages>

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 
 const flags = {
   en: 'us', 'zh-CN': 'cn', hi: 'in', es: 'es', ar: 'sa',
@@ -11,8 +11,12 @@ const xmlEntities = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
 const argumentsIn = /\{(\d+)\}/g;
 
 function readLocale(code) {
-  if (dictionaries.has(code)) return dictionaries.get(code);
-  const xml = readFileSync(new URL(`locales/${code}.xml`, import.meta.url), 'utf8');
+  if (!dictionaries.has(code)) dictionaries.set(code, loadLocale(code));
+  return dictionaries.get(code);
+}
+
+async function loadLocale(code) {
+  const xml = await readFile(new URL(`locales/${code}.xml`, import.meta.url), 'utf8');
   const lines = xml.trim().split(/\r?\n/);
   const header = lines.shift();
   if (header !== '<?xml version="1.0" encoding="UTF-8"?>' ||
@@ -25,7 +29,6 @@ function readLocale(code) {
     if (!message || Object.hasOwn(strings, message[1])) throw new Error(`Invalid locale message: ${code}`);
     strings[message[1]] = message[2].replace(/&(amp|lt|gt|quot|apos);/g, (_, name) => xmlEntities[name]);
   }
-  dictionaries.set(code, strings);
   return strings;
 }
 
@@ -35,12 +38,22 @@ function format(text, values) {
 
 // Readers and the remote collector use the original notice text internally.
 // Translate at the display boundary, including notices stored before a language switch.
-const sourceStrings = readLocale('zh-CN');
+const sourceStrings = await readLocale('zh-CN');
 export function sourceMessage(id, ...values) {
   return format(sourceStrings[id], values);
 }
 
 let fixedNotices, parameterizedNotices;
+let languageOptions;
+function loadLanguageOptions() {
+  languageOptions ??= Promise.all(Object.entries(flags).map(async ([language, flag]) => {
+    const [strings, png] = await Promise.all([
+      readLocale(language), readFile(new URL(`locales/flags/${flag}.png`, import.meta.url))
+    ]);
+    return { code: language, name: strings['language-name'], flag: 'data:image/png;base64,' + png.toString('base64') };
+  }));
+  return languageOptions;
+}
 function indexNotices() {
   fixedNotices = new Map();
   parameterizedNotices = [];
@@ -61,10 +74,9 @@ function indexNotices() {
 export async function createLocalePreferences(storage) {
   let code = await storage.get(preferencesKey).catch(() => undefined);
   if (typeof code !== 'string' || !Object.hasOwn(flags, code)) code = defaultCode;
-  const english = readLocale(defaultCode);
-  let strings = readLocale(code);
+  const [english, initial, options] = await Promise.all([readLocale(defaultCode), readLocale(code), loadLanguageOptions()]);
+  let strings = initial;
   let writing = Promise.resolve();
-  let options;
 
   const t = (id, ...values) => format(strings[id] ?? english[id], values);
   function notice(value, depth = 0) {
@@ -84,14 +96,7 @@ export async function createLocalePreferences(storage) {
 
   function response(includeOptions) {
     const result = { code, strings: { ...english, ...strings } };
-    if (includeOptions) {
-      options ??= Object.entries(flags).map(([language, flag]) => ({
-        code: language,
-        name: readLocale(language)['language-name'],
-        flag: 'data:image/png;base64,' + readFileSync(new URL(`locales/flags/${flag}.png`, import.meta.url)).toString('base64')
-      }));
-      result.options = options;
-    }
+    if (includeOptions) result.options = options;
     return result;
   }
 
@@ -101,7 +106,7 @@ export async function createLocalePreferences(storage) {
     }
     const selected = writing.then(async () => {
       if (code !== requested) {
-        const next = readLocale(requested);
+        const next = await readLocale(requested);
         await storage.set(preferencesKey, requested);
         code = requested;
         strings = next;

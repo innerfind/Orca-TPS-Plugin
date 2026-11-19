@@ -241,4 +241,6 @@
   <message id="next-sync-countdown">Next sync {0}</message>
   <message id="sync-in-progress">Syncing…</message>
   <message id="sync-waiting">Waiting to sync…</message>
+  <message id="sync-now">Sync now</message>
+  <message id="sync-queued">Queued for the next sync</message>
 </messages>

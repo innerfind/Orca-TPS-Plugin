@@ -4,9 +4,11 @@ import { mkdtemp, writeFile, mkdir, rm, utimes } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  UNIT_KEY_PREFIX, USAGE_SCHEMA, accumulateRecords, createUsageIndex, dayKeyAgo, localDayKey, realTokens, summarizeUsage, usageCutoffMs
+  BACKFILL_UNITS, UNIT_KEY_PREFIX, USAGE_SCHEMA, accumulateRecords, createUsageIndex, dayKeyAgo, leaderboardDay,
+  localDayKey, realTokens, summarizeUsage, usageCutoffMs
 } from '../src/usage-summary.mjs';
 import { discoverUsageUnits } from '../src/data.mjs';
+import { createComputation } from '../src/computation.mjs';
 
 let DatabaseSync;
 try { ({ DatabaseSync } = await import('node:sqlite')); }
@@ -126,6 +128,62 @@ test('index survives restart from storage without immediately retrying failed un
   await restarted.refresh();
   assert.equal(restarted.summary().windows.today.tokens, 50, 'totals come back from storage without re-reading');
   assert.deepEqual(reads, ['bad']);
+});
+
+test('backfill keeps today eligible before older history and retains complete totals across a failed scan', async () => {
+  const now = at(2026, 11, 8, 9), today = localDayKey(now), rankDay = leaderboardDay(now);
+  const yesterday = dayKeyAgo(now, 1), rankYesterday = leaderboardDay(now - 86_400_000);
+  const current = { [today]: { pi: { model: [1, 30, 0, 0, 0] } } };
+  const older = { [yesterday]: { pi: { model: [1, 10, 0, 0, 0] } } };
+  const reads = [], storage = fakeStorage();
+  let complete = true;
+  const descriptors = Array.from({ length: BACKFILL_UNITS + 1 }, (_, i) => ({
+    key: String(i), stamp: '1', bytes: 100, mtimeMs: i === 0 ? now : now - 86_400_000,
+    async read() {
+      reads.push(i);
+      return { days: i === 0 ? current : older, leaderboardFrom: rankYesterday,
+        leaderboardDays: i === 0 ? { [rankDay]: 30 } : { [rankYesterday]: 10 } };
+    }
+  }));
+  const index = createUsageIndex({ storage, now: () => now, leaderboard: true, rankDays: 2, maxUnits: BACKFILL_UNITS,
+    discover: async () => ({ descriptors: complete ? descriptors : [], coveredRemoteScopes: new Set(), localComplete: complete }) });
+  assert.deepEqual(await index.refresh(), { pending: 1 });
+  assert.equal(reads.length, BACKFILL_UNITS);
+  assert.equal(reads[0], 0);
+  assert.equal(index.leaderboardUsage().ready, true);
+  assert.equal(index.leaderboardHistory().ready, false);
+  await index.refresh();
+  const expected = summarizeUsage([current, ...descriptors.slice(1).map(() => older)], now);
+  assert.deepEqual(index.summary().windows, expected);
+  assert.strictEqual(index.summary(), index.summary(), 'repeated reads reuse the summary');
+  assert.deepEqual(index.leaderboardHistory().scores, [
+    { day: rankYesterday, tokens: BACKFILL_UNITS * 10 }, { day: rankDay, tokens: 30 }
+  ]);
+  complete = false;
+  await index.refresh();
+  assert.deepEqual(index.summary().windows, expected);
+  assert.equal(index.leaderboardUsage().ready, false);
+});
+
+test('the computation thread discovers and returns usage counters without sending raw logs', async t => {
+  const root = await fixture(t), now = Date.now();
+  const file = path.join(root, 'session.jsonl');
+  await writeFile(file, jsonl([{ type: 'session_meta', payload: { id: 'worker-session' } }, {
+    timestamp: new Date(now), type: 'event_msg', payload: { type: 'token_count',
+      info: { last_token_usage: { input_tokens: 600, output_tokens: 400 } } }
+  }]) + '{"incomplete":');
+  const compute = createComputation();
+  t.after(() => compute.close());
+  const { descriptors, complete } = await compute.call('discover', usageCutoffMs(now), {
+    roots: { codex: [root] }, includeDefaults: false, rankDay: leaderboardDay(now)
+  });
+  assert.equal(complete, true);
+  assert.equal(descriptors.length, 1);
+  assert.deepEqual(Object.keys(descriptors[0]).sort(), ['bytes', 'key', 'mtimeMs', 'stamp']);
+  const { key, stamp } = descriptors[0];
+  const result = await compute.call('usage', key, stamp);
+  assert.equal(result.leaderboardDays[leaderboardDay(now)], 1_000);
+  await assert.rejects(compute.call('usage', key, 'stale'), /source changed/);
 });
 
 test('transient read failures preserve cached totals across restart and retry unchanged files', async () => {
