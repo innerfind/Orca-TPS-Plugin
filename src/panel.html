@@ -86,22 +86,51 @@
     .panel-tab[aria-selected="true"] { border-bottom-color: var(--blue); color: var(--blue); }
     .panel-tab:focus-visible, .panel-view:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .panel-view { margin-top: 12px; }
-    .ladder-date { margin: 0 0 8px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-    .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-    .ladder-actions .refresh { border-radius: 8px; min-height: 30px; }
+    #usage, #leaderboard { display: grid; gap: 8px; }
+    .section-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 2px 8px; }
+    .section-title { margin: 0; color: var(--ink); font-size: 13px; line-height: 1.6; font-weight: 700; }
+    .section-detail { margin: 0; color: var(--muted); font-size: 11px; }
+    .ladder-card { padding: 12px 16px; }
+    .ladder-date { font-variant-numeric: tabular-nums; }
+    .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+    .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
     .ladder-primary { color: var(--surface); background: var(--blue); }
-    .ladder-note { color: var(--muted); margin: 6px 0; font-size: 11px; }
-    .ladder-status:not(:empty) { margin: 8px 0; color: var(--ink); }
-    .ladder-mine { margin: 8px 0 0; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .ladder-preview { margin: 8px 0; border-left: 3px solid var(--blue); padding-left: 8px; }
-    .ladder-preview p { margin: 0 0 5px; }
-    .ladder-rows { padding: 0; margin: 8px 0; list-style: none; }
-    .ladder-rows li { display: grid; grid-template-columns: 3ch minmax(0, 1fr) auto; gap: 6px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
-    .ladder-rows .ladder-self { color: var(--blue); }
-    .ladder-rows span:nth-child(2) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .ladder-rows time { grid-column: 2 / 4; color: var(--muted); font-size: 10px; }
-    .ladder-interval { width: 5.5rem; padding: 4px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--surface); font: inherit; }
-    .ladder-switch { display: inline-flex; align-items: center; gap: 4px; font-weight: 650; }
+    .ladder-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+    .ladder-actions .ladder-note { margin: 0; }
+    .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+    .ladder-status:empty, .ladder-mine:empty { display: none; }
+    .ladder-account-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    .ladder-mine { margin: 0; color: var(--purple); font-weight: 700; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+    .ladder-account-head .ladder-note { margin-top: 2px; }
+    .ladder-account-actions { margin-top: 8px; }
+    .ladder-preview { padding: 9px 11px; border-radius: 13px; background: var(--button-bg); }
+    .ladder-preview p { margin: 0 0 6px; }
+    .ladder-preview .ladder-note { margin-bottom: 8px; }
+    .ladder-upload { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); }
+    .ladder-rows { margin: 6px 0 0; padding: 0; list-style: none; }
+    .ladder-rows:empty { margin: 0; }
+    .ladder-rows li {
+      display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-areas: "rank name total" "rank time total";
+      column-gap: 8px; align-items: center; padding: 8px 0;
+      border-top: 1px solid var(--line); font-variant-numeric: tabular-nums;
+    }
+    .ladder-rank {
+      grid-area: rank; min-width: 3ch; padding: 4px; border-radius: 9px; text-align: center;
+      background: var(--tag-bg); color: var(--muted); font-size: 11px; font-weight: 700;
+    }
+    .ladder-self .ladder-rank { background: var(--button-bg); color: var(--blue); }
+    .ladder-name { grid-area: name; color: var(--purple); font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ladder-total {
+      grid-area: total; padding: 4px 8px; border-radius: 11px; background: var(--button-bg); color: var(--blue);
+      font-size: 14px; font-weight: 750; text-align: end; overflow-wrap: anywhere; max-width: 15ch;
+    }
+    .ladder-time { grid-area: time; color: var(--muted); font-size: 11px; }
+    .ladder-interval { width: 4.25rem; min-height: 34px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface); font: inherit; }
+    .ladder-field, .ladder-switch { display: inline-flex; align-items: center; gap: 5px; }
+    .ladder-switch { font-weight: 650; }
+    .ladder-switch input { margin: 0; accent-color: var(--blue); }
+    .ladder-interval:focus-visible, .ladder-switch input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .refresh.is-busy svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .messages:empty { display: none; }
@@ -110,7 +139,8 @@
     .message-warning { color: var(--orange); background: var(--warning-bg); }
     .loading { margin: 12px 2px 0; color: var(--muted); font-size: 12px; }
     .records { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
-    .record-card { min-width: 0; padding: 10px 16px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .record-card, .war, .heat, .ladder-card { min-width: 0; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
+    .record-card { padding: 10px 16px; }
     .card-top { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
     .identity { min-width: 0; }
     .agent { margin: 0 0 1px 25px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 10.5px; font-weight: 600; letter-spacing: .02em; line-height: 1.4; }
@@ -144,25 +174,26 @@
     .empty { margin-top: 16px; padding: 28px 18px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); text-align: center; }
     .empty-icon { font-size: 26px; }
     .empty-text { margin: 10px 0 0; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
-    .war { margin: 8px 0 0; padding: 12px 14px 8px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
-    .war-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 2px; padding: 3px; border-radius: 999px; background: var(--tag-bg); }
-    .war-tab { min-width: 0; padding: 5px 4px; border: 0; border-radius: 999px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 650; white-space: nowrap; cursor: pointer; }
-    .war-tab[aria-selected="true"] { background: var(--surface); color: var(--blue); box-shadow: var(--shadow); }
+    .war, .heat { padding: 10px 16px; }
+    .war-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 3px; border-radius: 13px; background: var(--speed-bg); }
+    .war-tab { min-width: 0; padding: 5px 4px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font-size: 11px; font-weight: 650; cursor: pointer; }
+    .war-tab[aria-selected="true"] { background: var(--button-bg); color: var(--blue); }
     .war-tab:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
-    .war-totals { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; margin: 12px 2px 0; }
+    .war-totals { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+    .war-stat { min-width: 0; padding: 7px 9px; border-radius: 13px; background: var(--speed-bg); }
     .war-label { display: block; color: var(--muted); font-size: 11px; }
-    .war-value { display: block; margin-top: 2px; font-size: 24px; line-height: 1.15; font-weight: 750; letter-spacing: -.6px; font-variant-numeric: tabular-nums; }
+    .war-value { display: block; margin-top: 2px; font-size: 20px; line-height: 1.2; font-weight: 750; letter-spacing: -.3px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     .war-value.tokens { color: var(--blue); }
     .war-value.requests { color: var(--green); }
     .war-value small { margin-left: 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
-    .war-note { margin: 8px 2px 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+    .war-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
     .war-note:empty, .war-note[hidden] { display: none; }
     .war-rows { margin: 6px 0 0; padding: 0; list-style: none; }
     .war-row { padding: 8px 2px 7px; border-top: 1px solid var(--line); }
     .war-row:first-child { border-top: 0; }
     .war-row-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
     .war-agent { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--tag-bg); color: var(--muted); font-size: 10px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
-    .war-model { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 650; }
+    .war-model { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--purple); font-size: 13px; font-weight: 700; }
     .war-amount { flex-shrink: 0; color: var(--blue); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
     .war-track { height: 4px; margin: 6px 0 4px; border-radius: 2px; background: var(--tag-bg); overflow: hidden; }
     .war-fill { height: 100%; border-radius: 2px; background: var(--blue); }
@@ -170,15 +201,10 @@
     .war-meta span { white-space: nowrap; }
     .war-empty { margin: 10px 2px 2px; color: var(--muted); font-size: 12px; text-align: center; }
     .war-empty[hidden] { display: none; }
-    .rank-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-    .rank-title { font-size: 12px; font-weight: 700; }
-    .rank-sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
     .rank-index { flex-shrink: 0; min-width: 14px; color: var(--muted); font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .rank-tps { flex-shrink: 0; color: var(--green); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
-    .heat { position: relative; margin: 8px 0 0; padding: 10px 14px 8px; border: 1px solid var(--line); border-radius: 20px; background: var(--surface); box-shadow: var(--shadow); }
-    .heat-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-    .heat-title { font-size: 12px; font-weight: 700; }
-    .heat-sub { color: var(--muted); font-size: 11px; white-space: nowrap; }
+    .rank-tps { flex-shrink: 0; padding: 3px 7px; border-radius: 10px; color: var(--speed); background: var(--speed-bg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+    #speed .war-fill { background: var(--speed); }
+    .heat { position: relative; }
     .heat-scroll { margin: 8px -4px 0; padding: 0 4px 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
     .heat-canvas { position: relative; }
     .heat-months { position: relative; height: 13px; color: var(--muted); font-size: 9px; }
@@ -210,6 +236,10 @@
       .agent { font-size: 10px; }
       .speed { padding: 5px 8px; gap: 3px; }
       .speed-value { font-size: 17px; }
+      .war, .heat, .ladder-card { padding-inline: 12px; }
+      .war-totals { gap: 6px; }
+      .war-value { font-size: 17px; }
+      .ladder-total { padding-inline: 6px; font-size: 12px; }
     }
     @media (prefers-reduced-motion: reduce) {
       .refresh.is-busy svg { animation: none; }
@@ -226,92 +256,111 @@
       <button class="panel-tab" id="tab-leaderboard" type="button" role="tab" aria-controls="leaderboard" aria-selected="false" tabindex="-1">天梯榜</button>
     </div>
     <section class="panel-view" id="leaderboard" role="tabpanel" aria-labelledby="tab-leaderboard" tabindex="0" hidden>
-      <p class="ladder-date" id="ladder-summary">今日用量</p>
-        <p class="ladder-status" id="ladder-status" role="status"></p>
-        <p class="ladder-note" id="ladder-freshness" role="status" hidden></p>
+      <div class="ladder-card" id="ladder-controls" hidden>
         <div id="ladder-sign-in" class="ladder-actions" hidden>
           <button class="refresh" id="ladder-login" type="button" disabled>用 GitHub 登录</button>
-          <span class="ladder-note">登录后可以提交今日用量。</span>
+          <span class="ladder-note">登录后可上传今日用量。</span>
         </div>
         <div class="ladder-preview" id="ladder-login-wait" hidden>
           <p>请在浏览器完成 GitHub 授权。授权成功后榜单会自动更新。</p>
           <div class="ladder-actions">
-            <button class="refresh" id="ladder-stop-login" type="button">取消</button>
+            <button class="refresh ladder-secondary" id="ladder-stop-login" type="button">取消</button>
           </div>
         </div>
         <div id="ladder-account" hidden>
-          <div class="ladder-actions">
-            <button class="refresh" id="ladder-update" type="button">刷新榜单</button>
-            <button class="refresh" id="ladder-logout" type="button">退出 GitHub 登录</button>
-          </div>
-          <p class="ladder-mine" id="ladder-mine"></p>
-          <p class="ladder-note" id="ladder-usage"></p>
-          <button class="refresh" id="ladder-preview" type="button">上传今日用量</button>
-          <div class="ladder-preview" id="ladder-confirmation" hidden>
-            <p id="ladder-preview-text"></p><p class="ladder-note">上传会更新当天的成绩。</p>
+          <div class="ladder-account-head">
+            <div>
+              <p class="ladder-mine" id="ladder-mine"></p>
+              <p class="ladder-note" id="ladder-usage"></p>
+            </div>
             <div class="ladder-actions">
-              <button class="refresh ladder-primary" id="ladder-submit" type="button">确认上传</button>
-              <button class="refresh" id="ladder-cancel" type="button">取消</button>
+              <button class="refresh" id="ladder-update" type="button">刷新榜单</button>
+              <button class="refresh ladder-secondary" id="ladder-logout" type="button">退出登录</button>
             </div>
           </div>
-          <form class="ladder-actions" id="ladder-upload-form">
-            <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch">自动上传</label>
-            <label for="ladder-upload-interval">间隔（秒）</label>
-            <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" required>
-            <button class="refresh" type="submit">保存间隔</button>
-          </form>
-          <p class="ladder-note" id="ladder-upload-note"></p>
+          <button class="refresh ladder-primary ladder-account-actions" id="ladder-preview" type="button">上传今日用量</button>
+          <div class="ladder-preview ladder-account-actions" id="ladder-confirmation" hidden>
+            <p id="ladder-preview-text"></p>
+            <p class="ladder-note">上传会更新当天的成绩。</p>
+            <div class="ladder-actions">
+              <button class="refresh ladder-primary" id="ladder-submit" type="button">确认上传</button>
+              <button class="refresh ladder-secondary" id="ladder-cancel" type="button">取消</button>
+            </div>
+          </div>
+          <div class="ladder-upload">
+            <form class="ladder-actions" id="ladder-upload-form">
+              <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch">自动上传</label>
+              <label class="ladder-field">
+                间隔（秒）
+                <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" required>
+              </label>
+              <button class="refresh ladder-secondary" type="submit">保存间隔</button>
+            </form>
+            <p class="ladder-note" id="ladder-upload-note"></p>
+          </div>
         </div>
+        <p class="ladder-status" id="ladder-status" role="status"></p>
+      </div>
+      <section class="ladder-card" aria-labelledby="ladder-rank-title">
+        <div class="section-head">
+          <h2 class="section-title" id="ladder-rank-title">今日排名</h2>
+          <p class="section-detail ladder-date" id="ladder-summary"></p>
+        </div>
+        <p class="ladder-note" id="ladder-freshness" role="status" hidden></p>
         <ol class="ladder-rows" id="ladder-rows" aria-label="今日用量名次"></ol>
         <p class="ladder-note" id="ladder-empty" hidden>今日还没有人提交。</p>
+      </section>
     </section>
     <section class="panel-view" id="usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" data-testid="usage-group" hidden>
-      <div class="war-tabs" role="tablist" aria-label="统计范围">
-        <button class="war-tab" type="button" role="tab" data-range="today" aria-selected="true" data-testid="range-today">当日战况</button>
-        <button class="war-tab" type="button" role="tab" data-range="week" aria-selected="false" data-testid="range-week">近一周战况</button>
-        <button class="war-tab" type="button" role="tab" data-range="month" aria-selected="false" data-testid="range-month">近一月战况</button>
-      </div>
-    <section class="war" id="war" aria-label="用量战况">
-      <div class="war-totals">
-        <div>
-          <span class="war-label">用量（含缓存读写）</span>
-          <strong class="war-value tokens" id="war-tokens" data-testid="war-tokens">—</strong>
+      <section class="war" id="war" aria-label="用量概览">
+        <div class="war-tabs" role="tablist" aria-label="统计范围">
+          <button class="war-tab" type="button" role="tab" data-range="today" aria-selected="true" data-testid="range-today">今天</button>
+          <button class="war-tab" type="button" role="tab" data-range="week" aria-selected="false" data-testid="range-week">近 7 天</button>
+          <button class="war-tab" type="button" role="tab" data-range="month" aria-selected="false" data-testid="range-month">近 30 天</button>
         </div>
-        <div>
-          <span class="war-label">请求</span>
-          <strong class="war-value requests" id="war-requests" data-testid="war-requests">—</strong>
+        <div class="war-totals">
+          <div class="war-stat">
+            <span class="war-label">总用量（含缓存读写）</span>
+            <strong class="war-value tokens" id="war-tokens" data-testid="war-tokens">—</strong>
+          </div>
+          <div class="war-stat">
+            <span class="war-label">请求数</span>
+            <strong class="war-value requests" id="war-requests" data-testid="war-requests">—</strong>
+          </div>
         </div>
-      </div>
-      <p class="war-note" id="war-note" data-testid="war-note" hidden></p>
-      <ol class="war-rows" id="war-rows" data-testid="war-rows" aria-label="按 agent 与模型的消耗"></ol>
-      <p class="war-empty" id="war-empty" data-testid="war-empty" hidden>这段时间还没有用量记录</p>
-    </section>
-    <section class="war" id="speed" aria-label="模型均速排名" data-testid="speed">
-      <div class="rank-head">
-        <span class="rank-title">模型均速</span>
-        <span class="rank-sub">单次请求输出速度的平均 · 基于会话日志</span>
-      </div>
-      <ol class="war-rows" id="speed-rows" data-testid="speed-rows" aria-label="按模型的平均输出速度，从高到低"></ol>
-      <p class="war-empty" id="speed-empty" data-testid="speed-empty" hidden>这段时间还没有样本充足的模型</p>
-      <p class="war-note" id="speed-note" data-testid="speed-note" hidden></p>
-    </section>
-    <section class="heat" id="heat" data-testid="heatmap">
-      <div class="heat-head">
-        <span class="heat-title">用量热力图</span>
-        <span class="heat-sub" id="heat-sub">近一年每日用量（MB，含缓存）</span>
-      </div>
-      <div class="heat-scroll" id="heat-scroll">
-        <div class="heat-canvas">
-          <div class="heat-months" id="heat-months" aria-hidden="true"></div>
-          <div class="heat-grid" id="heat-grid" role="img" aria-label="近一年每日用量热力图（MB）"></div>
+        <p class="war-note" id="war-note" data-testid="war-note" hidden></p>
+      </section>
+      <section class="war" aria-labelledby="war-model-title">
+        <h2 class="section-title" id="war-model-title">模型用量</h2>
+        <ol class="war-rows" id="war-rows" data-testid="war-rows" aria-label="按 agent 与模型的消耗"></ol>
+        <p class="war-empty" id="war-empty" data-testid="war-empty" hidden>这段时间还没有用量记录</p>
+      </section>
+      <section class="war" id="speed" aria-labelledby="speed-title" data-testid="speed">
+        <div class="section-head">
+          <h2 class="section-title" id="speed-title">模型均速</h2>
+          <p class="section-detail">根据会话日志计算的平均输出速度</p>
         </div>
-      </div>
-      <div class="heat-foot">
-        <span id="heat-total" data-testid="heat-total"></span>
-        <span class="heat-legend" aria-hidden="true">少 <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> 多</span>
-      </div>
-      <div class="heat-tip" id="heat-tip" role="tooltip" hidden></div>
-    </section>
+        <ol class="war-rows" id="speed-rows" data-testid="speed-rows" aria-label="按模型的平均输出速度，从高到低"></ol>
+        <p class="war-empty" id="speed-empty" data-testid="speed-empty" hidden>这段时间还没有样本充足的模型</p>
+        <p class="war-note" id="speed-note" data-testid="speed-note" hidden></p>
+      </section>
+      <section class="heat" id="heat" aria-labelledby="heat-title" data-testid="heatmap">
+        <div class="section-head">
+          <h2 class="section-title" id="heat-title">用量热力图</h2>
+          <p class="section-detail" id="heat-sub">近一年每日用量（MB，含缓存）</p>
+        </div>
+        <div class="heat-scroll" id="heat-scroll">
+          <div class="heat-canvas">
+            <div class="heat-months" id="heat-months" aria-hidden="true"></div>
+            <div class="heat-grid" id="heat-grid" role="img" aria-label="近一年每日用量热力图（MB）"></div>
+          </div>
+        </div>
+        <div class="heat-foot">
+          <span id="heat-total" data-testid="heat-total"></span>
+          <span class="heat-legend" aria-hidden="true">少 <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> 多</span>
+        </div>
+        <div class="heat-tip" id="heat-tip" role="tooltip" hidden></div>
+      </section>
     </section>
     <section class="panel-view" id="current-data" role="tabpanel" aria-labelledby="tab-current" tabindex="0">
       <div class="panel-header">
@@ -872,6 +921,10 @@
           if (row.mine) item.classList.add('ladder-self');
           const rank = document.createElement('span'), name = document.createElement('span');
           const total = document.createElement('strong'), time = document.createElement('time');
+          rank.className = 'ladder-rank';
+          name.className = 'ladder-name';
+          total.className = 'ladder-total';
+          time.className = 'ladder-time';
           rank.textContent = row.rank;
           name.textContent = row.username;
           name.title = row.username;
@@ -896,6 +949,7 @@
         if (freshness.textContent !== notice) freshness.textContent = notice;
         freshness.hidden = !notice;
         const signedIn = model?.signedIn === true || board.authenticated === true;
+        element('controls').hidden = false;
         element('sign-in').hidden = signedIn || Boolean(pendingLogin);
         element('login').disabled = busy || !loginDraft;
         element('login-wait').hidden = !pendingLogin;
