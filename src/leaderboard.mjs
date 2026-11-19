@@ -7,7 +7,6 @@ const METHOD = 'tps.leaderboard';
 const SECRET = 'leaderboard-session';
 const ACCOUNT_CACHE = 'leaderboard:account';
 const INSTALLATION = 'leaderboard:installation-id';
-const UPLOAD = 'leaderboard:upload';
 const HISTORY = 'leaderboard:history';
 const RANKING_CACHE = 'leaderboard:ranking';
 const DEFAULT_ENDPOINT = 'https://43.157.2.14';
@@ -15,9 +14,7 @@ const LOGIN_TIMEOUT = 10 * 60 * 1000;
 const LOGIN_POLL = 2000;
 const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000;
 const LOGOUT_RETRY = 15_000;
-const DEFAULT_UPLOAD_INTERVAL = 60;
-const MIN_UPLOAD_INTERVAL = 10_000;
-const validInterval = seconds => Number.isSafeInteger(seconds) && seconds >= 10 && Number.isSafeInteger(seconds * 1000);
+const UPLOAD_INTERVAL = 10_000;
 const sessionKey = value => value ? createHash('sha256').update(value).digest('hex') : '';
 const tokenPattern = /^[\w-]{43}$/;
 const validUsername = value => typeof value === 'string' && value.length > 0 && value.length <= 39;
@@ -42,9 +39,8 @@ export function startLeaderboard(orca, {
   }
   const lifetime = new AbortController();
   const host = orca.host;
-  let token = '', login, submitting, scheduling = false, nextAttempt = 0;
-  let upload = { enabled: false, interval: DEFAULT_UPLOAD_INTERVAL };
-  let settingsWrite = Promise.resolve(), credentialWrite = Promise.resolve();
+  let token = '', login, submitting, uploadingKind = null, scheduling = false, nextAttempt = null;
+  let credentialWrite = Promise.resolve();
   let username = '', accountWrite = Promise.resolve(), sessionProblem = '';
   let uploadStatus, banned = false;
   const revocations = new Map();
@@ -103,19 +99,17 @@ export function startLeaderboard(orca, {
   rankingCache(1);
 
   const ready = (async () => {
-    const tasks = [orca.storage.get(UPLOAD), readHistory ? orca.storage.get(HISTORY) : undefined, orca.storage.get(ACCOUNT_CACHE)];
+    const tasks = [readHistory ? orca.storage.get(HISTORY) : undefined, orca.storage.get(ACCOUNT_CACHE)];
     if (secretAvailable('secrets.get')) tasks.push(host.call('secrets.get', { key: SECRET }));
-    const [setting, history, account, saved] = await Promise.allSettled(tasks);
+    const [history, account, saved] = await Promise.allSettled(tasks);
     restoreCredentials(saved?.value?.value);
+    if (token) nextAttempt = now().getTime() + UPLOAD_INTERVAL;
     const cached = account.value;
     if (token && cached?.origin === base.origin && cached.session === sessionKey(token) && validUsername(cached.username)) {
       username = cached.username;
     }
-    if (validInterval(setting.value?.interval)) {
-      upload = { enabled: Boolean(token) && setting.value.enabled === true && setting.value.session === sessionKey(token), interval: setting.value.interval };
-    }
     if (token && history.value?.origin === base.origin && history.value.session === sessionKey(token)) {
-      historyJob = { next: 0 };
+      historyJob = { next: nextAttempt };
     }
   })();
 
@@ -156,18 +150,6 @@ export function startLeaderboard(orca, {
     historyWrite = historyWrite.then(() => orca.storage.set(HISTORY, saved)).catch(() => {});
   }
 
-  function saveUpload() {
-    const setting = { ...upload, session: upload.enabled ? sessionKey(token) : '' };
-    settingsWrite = settingsWrite.catch(() => {}).then(() => orca.storage.set(UPLOAD, setting));
-    return settingsWrite;
-  }
-
-  async function stopUpload() {
-    if (!upload.enabled) return;
-    upload = { ...upload, enabled: false };
-    await saveUpload().catch(() => {});
-  }
-
   function persistCredentials() {
     const pending = [...revocations].map(([token, { expiresAt }]) => ({ token, expiresAt }));
     const operation = token || pending.length ? 'secrets.set' : 'secrets.delete';
@@ -191,8 +173,8 @@ export function startLeaderboard(orca, {
   async function saveToken(value, problem = '') {
     const changed = token !== value;
     token = value;
-    let reset = Promise.resolve();
     if (changed) {
+      nextAttempt = token ? now().getTime() + UPLOAD_INTERVAL : null;
       rememberUsername('');
       sessionProblem = problem;
       uploadStatus = undefined;
@@ -200,9 +182,8 @@ export function startLeaderboard(orca, {
       lastUpload = null;
       if (historyJob) setHistoryJob(undefined);
       historyProblem = '';
-      reset = stopUpload();
     }
-    await Promise.all([reset, persistCredentials()]);
+    await persistCredentials();
   }
 
   async function request(path, { body, auth = true, credential = auth ? token : '', requestId } = {}) {
@@ -264,9 +245,8 @@ export function startLeaderboard(orca, {
     return {
       days, board: { ...board, authenticated: signedIn }, updatedAt, signedIn, sessionProblem,
       logoutPending: revocations.size > 0, logoutStorageFailed: revocations.size > 0 && credentialStorageFailed,
-      upload,
-      nextAutomaticAt: upload.enabled ? Math.max(nextAttempt, board.nextUploadAt ?? 0, board.lockedUntil ?? 0) : null,
-      uploading: Boolean(submitting), lastUpload, initializing: Boolean(historyJob), historyProblem
+      nextAutomaticAt: nextAttempt === null ? null : Math.max(nextAttempt, board.nextUploadAt ?? 0, board.lockedUntil ?? 0),
+      uploading: Boolean(submitting), uploadingKind, lastUpload, initializing: Boolean(historyJob), historyProblem
     };
   }
 
@@ -282,7 +262,7 @@ export function startLeaderboard(orca, {
   }
 
   function uploadDeadline(status, score) {
-    return Math.max(status.nextUploadAt ?? 0, score ? score.submittedAt + MIN_UPLOAD_INTERVAL : 0);
+    return Math.max(status.nextUploadAt ?? 0, score ? score.submittedAt + UPLOAD_INTERVAL : 0);
   }
 
   function beginLogin() {
@@ -311,8 +291,7 @@ export function startLeaderboard(orca, {
       if (validUsername(result.username)) rememberUsername(result.username);
       void request('/api/auth/plugin/poll', { auth: false, body: { verifier: attempt.verifier, received: true } });
       if (readHistory) {
-        setHistoryJob({ next: 0 });
-        void runHistoryInitialization().catch(() => {});
+        setHistoryJob({ next: nextAttempt });
       }
       return { code: 'signed_in', ...panelState(days) };
     }
@@ -346,13 +325,17 @@ export function startLeaderboard(orca, {
     if (persist) void persistCredentials();
   }
 
-  function submit(preview, stillEnabled = () => true) {
+  function submit(preview, kind, stillEnabled) {
     if (submitting) return { code: 'upload_in_progress' };
-    submitting = performSubmission(preview, stillEnabled).finally(() => { submitting = undefined; });
+    uploadingKind = kind;
+    submitting = performSubmission(preview, kind, stillEnabled).finally(() => {
+      submitting = undefined;
+      uploadingKind = null;
+    });
     return submitting;
   }
 
-  async function performSubmission(preview, stillEnabled) {
+  async function performSubmission(preview, kind, stillEnabled) {
     if (!token) return { code: 'login_required' };
     const credential = token;
     if (!preview?.ready || !Number.isSafeInteger(preview.tokens) || preview.tokens < 1) return { code: 'usage_unready' };
@@ -370,7 +353,9 @@ export function startLeaderboard(orca, {
     const requestId = randomUUID();
     const options = { requestId, body: { day: preview.day, installationId: id, tokens: preview.tokens } };
     let result = await request('/api/today/submit', options);
-    if (result.code === 'unavailable' && token === credential && stillEnabled()) result = await request('/api/today/submit', options);
+    if (kind === 'automatic' && result.code === 'unavailable' && token === credential && stillEnabled()) {
+      result = await request('/api/today/submit', options);
+    }
     if (token === credential) rememberUpload(result);
     return result;
   }
@@ -378,28 +363,34 @@ export function startLeaderboard(orca, {
   function rememberUpload(result) {
     const { day, tokens, submitted, submittedAt, lockedUntil, nextUploadAt } = result;
     if (validUsername(result.username)) rememberUsername(result.username);
-    if (result.code === 'banned') banned = true;
+    if (result.code === 'banned') {
+      banned = true;
+      nextAttempt = null;
+      return;
+    }
     if (day === today()) {
       uploadStatus = { day, tokens, submitted, submittedAt, lockedUntil, nextUploadAt };
+      if (banned) nextAttempt = now().getTime() + UPLOAD_INTERVAL;
       banned = false;
     }
   }
 
   async function runScheduled() {
     await ready;
-    if (!upload.enabled || !token || scheduling || lifetime.signal.aborted || now().getTime() < nextAttempt) return;
-    const settings = upload;
+    if (nextAttempt === null || !token || scheduling || submitting || lifetime.signal.aborted) return;
+    const day = today(), status = uploadStatus?.day === day ? uploadStatus : {};
+    nextAttempt = Math.max(nextAttempt, uploadDeadline(status, dailyScore(day)), status.lockedUntil ?? 0);
+    if (now().getTime() < nextAttempt) return;
     const credential = token;
-    const stillEnabled = () => upload === settings && token === credential && !lifetime.signal.aborted;
+    const stillSignedIn = () => token === credential && !lifetime.signal.aborted;
     scheduling = true;
     try {
       const preview = await readUsage();
-      if (!stillEnabled() || !preview.ready || preview.tokens < 1) return;
-      const result = await submit(preview, stillEnabled);
-      if (token === credential) recordUpload('automatic', result.code);
-      if (stillEnabled()) {
-        nextAttempt = Math.max(now().getTime() + settings.interval * 1000, result.nextUploadAt ?? 0, result.lockedUntil ?? 0);
-        if (result.code === 'banned') await stopUpload();
+      if (!stillSignedIn() || !preview.ready || preview.tokens < 1) return;
+      const result = await submit(preview, 'automatic', stillSignedIn);
+      if (stillSignedIn()) {
+        recordUpload('automatic', result.code);
+        if (!banned) nextAttempt = Math.max(now().getTime() + UPLOAD_INTERVAL, result.nextUploadAt ?? 0, result.lockedUntil ?? 0);
       }
     } finally { scheduling = false; }
   }
@@ -407,7 +398,7 @@ export function startLeaderboard(orca, {
   async function runHistoryInitialization() {
     await ready;
     const job = historyJob;
-    if (!job || !token || job.running || lifetime.signal.aborted || now().getTime() < job.next) return;
+    if (!job || !token || banned || job.running || lifetime.signal.aborted || now().getTime() < job.next) return;
     job.running = true;
     job.next = now().getTime() + 5000;
     const active = () => historyJob === job && !lifetime.signal.aborted;
@@ -426,9 +417,13 @@ export function startLeaderboard(orca, {
         requestId: randomUUID(), body: { day: snapshot.day, installationId: id, scores: snapshot.scores }
       });
       submitting = attempt;
+      uploadingKind = 'history';
       let result;
       try { result = await attempt; }
-      finally { submitting = undefined; }
+      finally {
+        submitting = undefined;
+        uploadingKind = null;
+      }
       if (!active()) return;
       rememberUpload(result);
       recordUpload('history', result.code);
@@ -474,32 +469,19 @@ export function startLeaderboard(orca, {
       case 'submit': {
         const credential = token;
         const current = await readUsage();
-        const result = payload.day === current.day && payload.tokens === current.tokens
-          ? await submit(current, () => token === credential) : { code: 'usage_changed' };
+        const previewChanged = (payload.day !== undefined || payload.tokens !== undefined) &&
+          (payload.day !== current.day || payload.tokens !== current.tokens);
+        const result = previewChanged
+          ? { code: 'usage_changed' } : await submit(current, 'manual', () => token === credential);
         if (credential && token === credential) recordUpload('manual', result.code);
         return { code: result.code || 'unavailable', ...panelState(days) };
-      }
-      case 'upload': {
-        if (typeof payload.enabled !== 'boolean' || !validInterval(payload.interval)) return { code: 'invalid_interval' };
-        if (payload.enabled && !token) return { code: 'login_required' };
-        const setting = { enabled: payload.enabled, interval: payload.interval };
-        upload = setting;
-        nextAttempt = upload.enabled && nextAttempt > now().getTime() ? now().getTime() + upload.interval * 1000 : 0;
-        try { await saveUpload(); }
-        catch {
-          if (upload === setting) upload = { ...upload, enabled: false };
-          return { code: 'unavailable', ...panelState(days) };
-        }
-        void runScheduled().catch(() => {});
-        return panelState(days);
       }
       default: return { code: 'invalid' };
     }
   });
   function tick() {
     void ready.then(revokeSessions);
-    void runScheduled().catch(() => {});
-    void runHistoryInitialization().catch(() => {});
+    void runHistoryInitialization().catch(() => {}).then(runScheduled).catch(() => {});
   }
   const timer = setInterval(tick, 1000);
   timer.unref?.();

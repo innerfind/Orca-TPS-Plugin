@@ -131,8 +131,11 @@
     .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
     .ladder-control { min-height: 36px; padding-inline: 12px; font-size: 13px; font-weight: 700; }
     .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
-    .ladder-primary { color: var(--surface); background: var(--blue); }
     .ladder-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+    .ladder-sync { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+    .ladder-sync .ladder-note { min-width: 0; overflow-wrap: anywhere; }
+    .ladder-sync-result { margin-inline-start: auto; text-align: right; }
+    .ladder-sync-result[data-result="failed"] { color: var(--error); }
     .ladder-actions .ladder-note { margin: 0; }
     .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .ladder-status:empty, .ladder-mine:empty { display: none; }
@@ -242,16 +245,6 @@
     .ladder-preview { padding: 9px 11px; border-radius: 13px; background: var(--button-bg); }
     .ladder-preview p { margin: 0 0 6px; }
     .ladder-preview .ladder-note { margin-bottom: 8px; }
-    .ladder-upload { margin-top: 7px; }
-    .ladder-upload-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
-    .ladder-confirmation { margin-top: 8px; }
-    .ladder-upload-feedback {
-      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: baseline;
-      font-variant-numeric: tabular-nums;
-    }
-    .ladder-upload-result { text-align: right; overflow-wrap: anywhere; }
-    .ladder-upload-result[data-result="success"] { color: var(--green); }
-    .ladder-upload-result[data-result="failure"] { color: var(--error); }
     .ladder-rows { margin: 6px 0 0; padding: 0; list-style: none; }
     .ladder-rows:empty { margin: 0; }
     .ladder-rows li {
@@ -273,11 +266,6 @@
       font-size: 14px; font-weight: 750; text-align: end; overflow-wrap: anywhere; max-width: 15ch;
     }
     .ladder-time { grid-area: time; color: var(--muted); font-size: 11px; }
-    .ladder-interval { width: 4.25rem; min-height: 34px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface); font: inherit; }
-    .ladder-field, .ladder-switch { display: inline-flex; align-items: center; gap: 5px; }
-    .ladder-switch { font-weight: 650; }
-    .ladder-switch input { margin: 0; accent-color: var(--blue); }
-    .ladder-interval:focus-visible, .ladder-switch input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .refresh.is-busy svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .messages:empty { display: none; }
@@ -457,37 +445,14 @@
               <dd class="ladder-user-rank" id="ladder-user-rank-30" data-localized-text>—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-30" data-i18n-title="monthly-ranked-usage">—</dd>
             </dl>
           </div>
+          <div class="ladder-sync">
+            <p class="ladder-note" id="ladder-sync-countdown" data-localized-text hidden></p>
+            <p class="ladder-note ladder-sync-result" id="ladder-sync-result" role="status" data-localized-text hidden></p>
+          </div>
         </div>
         <p class="ladder-status" id="ladder-status" role="status" data-localized-text></p>
         <p class="ladder-note" id="ladder-logout-pending" role="status" data-localized-text hidden></p>
       </div>
-      <section class="ladder-card" aria-labelledby="ladder-upload-title">
-        <h2 class="section-title" id="ladder-upload-title"><span data-i18n="data-upload"></span></h2>
-        <form class="ladder-actions ladder-upload" id="ladder-upload-form">
-          <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch" disabled><span data-i18n="automatic-upload"></span></label>
-          <label class="ladder-field">
-            <span data-i18n="upload-interval"></span>
-            <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" data-i18n-aria-label="upload-interval-label" required disabled>
-            <span data-i18n="seconds-unit"></span>
-          </label>
-          <div class="ladder-upload-buttons">
-            <button class="refresh ladder-control" id="ladder-save-upload" type="submit" disabled><span data-i18n="save-settings"></span></button>
-            <button class="refresh ladder-control" id="ladder-preview" type="button" disabled><span data-i18n="manual-upload"></span></button>
-          </div>
-        </form>
-        <div class="ladder-upload-feedback">
-          <p class="ladder-note" id="ladder-upload-note" data-localized-text></p>
-          <p class="ladder-note ladder-upload-result" id="ladder-upload-result" role="status" data-localized-text hidden></p>
-        </div>
-        <div class="ladder-preview ladder-confirmation" id="ladder-confirmation" hidden>
-          <p id="ladder-preview-text" data-localized-text></p>
-          <p class="ladder-note"><span data-i18n="upload-confirm-note"></span></p>
-          <div class="ladder-actions">
-            <button class="refresh ladder-primary" id="ladder-submit" type="button"><span data-i18n="confirm-upload"></span></button>
-            <button class="refresh ladder-secondary" id="ladder-cancel" type="button"><span data-i18n="cancel"></span></button>
-          </div>
-        </div>
-      </section>
       <section class="ladder-card" aria-labelledby="ladder-rank-title">
         <div class="section-head">
           <div class="ladder-title-actions">
@@ -1285,21 +1250,21 @@
         history_pending: 'preparing-upload-history', history_invalid: 'history-upload-invalid',
         new_day: 'new-ranking-day', usage_changed: 'usage-changed',
         usage_unready: 'usage-not-ready', invalid: 'upload-invalid',
-        rate_limited: 'rate-limited', invalid_interval: 'invalid-upload-interval'
+        rate_limited: 'rate-limited'
       };
       const messageFor = code => Object.hasOwn(messages, code) ? t(messages[code]) : undefined;
-      let model, session, local, preview, pendingLogin, retryLogin, rankDays = 1;
+      let model, session, pendingLogin, retryLogin, rankDays = 1;
       const cachedRankings = new Map(), refreshing = new Set();
-      let busy = false, savingUpload = false, readingUsage = false, restoringSession = false, edited = false;
+      let busy = false, restoringSession = false;
       let revision = 0, drawnRows = '', renderedDay = '', loginProblem = '', messageCode = '';
       let summaryAccount = '', summaryUpload = null;
 
       async function request(action, payload = {}) {
         try {
-          return await bridge.request('tps.leaderboard', { action, days: rankDays, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
-        } catch {
-          return { code: 'unavailable' };
-        }
+          const result = await bridge.request('tps.leaderboard', { action, days: rankDays, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
+          if (result && typeof result === 'object') return result;
+        } catch {}
+        return { code: 'unavailable' };
       }
 
       function medal(rank, period) {
@@ -1387,32 +1352,36 @@
         element('medals').hidden = !hasMedals;
       }
 
-      function renderUpload(snapshot, signedIn, time) {
-        const enabled = snapshot.upload?.enabled === true;
-        const next = Math.ceil(((snapshot.nextAutomaticAt ?? 0) - time) / 1000);
-        const countdown = element('upload-note');
-        let text = t('auto-upload-off');
-        if (!signedIn) text = t('login-to-upload');
-        else if (snapshot.uploading || messageCode === 'upload_in_progress') text = t('uploading');
-        else if (enabled) {
-          if (next > 0) {
-            const hours = Math.floor(next / 3600), minutes = Math.floor(next / 60) % 60, seconds = next % 60;
-            const span = [minutes, seconds].map(value => locale.number(value, { minimumIntegerDigits: 2 })).join(':');
-            text = t('auto-upload-countdown', (hours ? locale.number(hours) + ':' : '') + span);
-          } else text = t('waiting-for-auto-upload');
+      function renderSyncCountdown(snapshot, signedIn, time) {
+        const note = element('sync-countdown');
+        let text = '';
+        if (signedIn && !snapshot?.board?.banned) {
+          if (snapshot.uploading) text = t('sync-in-progress');
+          else if (Number.isFinite(snapshot.nextAutomaticAt)) {
+            const seconds = Math.ceil((snapshot.nextAutomaticAt - time) / 1000);
+            if (seconds > 0) {
+              const hours = Math.floor(seconds / 3600);
+              const timer = [Math.floor(seconds / 60) % 60, seconds % 60]
+                .map(value => locale.number(value, { minimumIntegerDigits: 2 })).join(':');
+              text = t('next-sync-countdown', hours ? locale.number(hours) + ':' + timer : timer);
+            } else text = t('sync-waiting');
+          }
         }
-        if (countdown.textContent !== text) countdown.textContent = text;
-        const log = element('upload-result'), record = signedIn ? snapshot.lastUpload : null;
-        const success = ['accepted', 'initialized', 'duplicate'].includes(record?.code);
-        log.hidden = !record;
-        log.dataset.result = success ? 'success' : 'failure';
-        const name = { automatic: t('automatic-upload'), manual: t('manual-upload'), history: t('history-upload') }[record?.kind] ?? t('upload');
-        const detail = record?.code === 'initialized' ? t('completed') : success ? t('success') : t('upload-failed', messageFor(record?.code) ?? t('retry'));
-        const fullOutcome = record ? t('upload-result-summary', clock(record.at), name, detail) : '';
-        const outcome = success ? t('upload-result-short', name, detail, shortClock(record.at)) : fullOutcome;
-        if (log.textContent !== outcome) log.textContent = outcome;
-        const tooltip = success ? fullOutcome : '';
-        if (log.title !== tooltip) log.title = tooltip;
+        note.hidden = !text;
+        if (note.textContent !== text) note.textContent = text;
+      }
+
+      function renderSyncResult(record) {
+        const note = element('sync-result');
+        note.hidden = !Number.isFinite(record?.at);
+        if (note.hidden) return;
+        const succeeded = ['accepted', 'initialized', 'duplicate'].includes(record.code);
+        const at = shortClock(record.at);
+        const text = succeeded ? t('last-sync-time', at)
+          : t('last-sync-failed', at, messageFor(record.code) ?? t('sync-failure-unknown'));
+        note.dataset.result = succeeded ? 'success' : 'failed';
+        note.title = clock(record.at);
+        if (note.textContent !== text) note.textContent = text;
       }
 
       function render(code = messageCode) {
@@ -1421,7 +1390,7 @@
         const time = Date.now();
         const { board = {} } = model ?? {};
         const snapshot = session ?? model ?? {};
-        const { board: account = board, upload, sessionProblem, initializing, historyProblem } = snapshot;
+        const { board: account = board, sessionProblem, initializing, historyProblem } = snapshot;
         const selected = model?.days === rankDays;
         const readyBoard = board.day === renderedDay && Array.isArray(board.rows);
         const live = selected && readyBoard;
@@ -1447,6 +1416,7 @@
         element('login').disabled = busy;
         element('login-wait').hidden = !pendingLogin;
         element('account').hidden = !signedIn;
+        element('logout').disabled = busy;
         const logoutNote = element('logout-pending');
         const logoutText = snapshot.logoutStorageFailed ? t('logout-storage-failed')
           : snapshot.logoutPending ? t('logout-pending') : '';
@@ -1454,9 +1424,9 @@
         logoutNote.hidden = !logoutText;
         const boardProblem = selected ? messageFor(board.code) : undefined;
         const sessionStatus = checkingLogin ? t('checking-login') : '';
-        const locked = account.lockedUntil > time, coolingDown = account.nextUploadAt > time;
+        const locked = account.lockedUntil > time;
         const authProblem = pendingLogin ? undefined : messageFor(sessionProblem);
-        const actionMessage = code === 'upload_in_progress' || code === snapshot.lastUpload?.code ? undefined : messageFor(code);
+        const actionMessage = messageFor(code);
         element('status').textContent = authProblem ?? actionMessage ?? messageFor(loginProblem) ??
           (account.banned ? messageFor('banned') : boardProblem) ??
           (locked ? messageFor('locked') : messageFor(historyProblem) ?? (initializing ? messageFor('history_pending') : sessionStatus));
@@ -1467,26 +1437,8 @@
         const username = signedIn ? account.username : '';
         renderRows(ranking?.rows ?? [], username);
         if (signedIn) renderAccount(username, account);
-        else preview = undefined;
-        const usageReady = local?.ready && local.day === renderedDay;
-        const removed = account.day === renderedDay && account.submitted && account.tokens === null;
-        const canSubmit = signedIn && usageReady && local.tokens > 0 && !locked && !removed;
-        element('preview').hidden = Boolean(preview);
-        element('preview').disabled = !canSubmit || coolingDown || busy || snapshot.uploading;
-        element('confirmation').hidden = !canSubmit || !preview;
-        if (preview) {
-          const day = locale.date(new Date(preview.day + 'T00:00:00Z'), { dateStyle: 'medium', timeZone: 'UTC' });
-          element('preview-text').textContent = t('preview-upload', day, formatTokenMB(preview.tokens));
-        }
-        element('submit').disabled = coolingDown || busy || snapshot.uploading;
-        if (coolingDown && canSubmit && !code && !upload?.enabled) element('status').textContent = messageFor('too_soon');
-        const enabled = upload?.enabled === true;
-        element('upload-enabled').checked = enabled;
-        element('upload-enabled').disabled = !signedIn || savingUpload;
-        element('upload-interval').disabled = !signedIn || savingUpload;
-        element('save-upload').disabled = !signedIn || savingUpload;
-        if (!edited) element('upload-interval').value = upload?.interval ?? 60;
-        renderUpload(snapshot, signedIn, time);
+        renderSyncCountdown(snapshot, signedIn, time);
+        renderSyncResult(signedIn ? snapshot.lastUpload : null);
       }
 
       async function showCache(days = rankDays) {
@@ -1500,7 +1452,7 @@
       }
 
       async function refreshSession() {
-        if (restoringSession || busy || savingUpload || lifetime.signal.aborted) return;
+        if (restoringSession || busy || lifetime.signal.aborted) return;
         restoringSession = true;
         const requestedAt = revision;
         try {
@@ -1508,20 +1460,7 @@
           if (lifetime.signal.aborted || revision !== requestedAt || typeof result.signedIn !== 'boolean') return;
           session = result;
           render();
-          void refreshUsage();
         } finally { restoringSession = false; }
-      }
-
-      async function refreshUsage() {
-        if (readingUsage || !(session ?? model)?.signedIn || lifetime.signal.aborted) return;
-        readingUsage = true;
-        try {
-          const result = await request('usage');
-          if (lifetime.signal.aborted || !result.local) return;
-          local = result.local;
-          if (preview && (local.day !== preview.day || local.tokens !== preview.tokens)) preview = undefined;
-          if (!group.hidden) render();
-        } finally { readingUsage = false; }
       }
 
       function cacheRanking(result, days) {
@@ -1533,13 +1472,11 @@
       }
 
       function showState(result, days = rankDays) {
-        const wasSignedIn = (session ?? model)?.signedIn;
         model = result.board ? result : { ...model, days, board: { code: result.code } };
         if (typeof result.signedIn === 'boolean') session = result;
         cacheRanking(result, days);
         render(result.code ?? '');
         showSummaries();
-        if (!wasSignedIn) void refreshUsage();
       }
 
       function showSummaries() {
@@ -1564,7 +1501,7 @@
       async function refresh(days = rankDays) {
         if (group.hidden || lifetime.signal.aborted) return;
         if (renderedDay !== boardDay()) render('');
-        if (busy || savingUpload || refreshing.has(days)) return;
+        if (busy || refreshing.has(days)) return;
         const requestedAt = revision;
         refreshing.add(days);
         try {
@@ -1581,37 +1518,23 @@
         void showCache();
       }
 
-      async function update(action, details) {
+      async function logout() {
         if (busy) return;
         busy = true;
         const requestedAt = ++revision;
-        if (action === 'logout') {
-          edited = false;
-          preview = undefined;
-          pendingLogin = undefined;
-          loginProblem = '';
-          clearTimeout(retryLogin);
-        }
-        if (action === 'submit') render('upload_in_progress');
+        pendingLogin = undefined;
+        loginProblem = '';
+        clearTimeout(retryLogin);
+        let result;
         try {
-          const result = await request(action, details);
-          busy = false;
-          if (result.board && (revision === requestedAt || result.code === 'signed_out')) showState(result);
-          else render(result.code);
-          if (result.code === 'signed_out') void refresh();
+          render('');
+          result = await request('logout');
         } finally { busy = false; }
-      }
-
-      async function updateUpload(enabled, interval) {
-        if (savingUpload) return;
-        savingUpload = true;
-        revision++;
-        try {
-          const result = await request('upload', { enabled, interval });
-          if (typeof result.signedIn === 'boolean') session = result;
-          savingUpload = false;
-          render(result.code);
-        } finally { savingUpload = false; }
+        if (lifetime.signal.aborted) return;
+        if (revision !== requestedAt) { render(); return; }
+        if (result.board) showState(result);
+        else render(result.code);
+        if (result.code === 'signed_out') void refresh();
       }
 
       async function poll() {
@@ -1700,40 +1623,13 @@
         render('');
         if (attempt) await request('cancel', { loginUrl: attempt.loginUrl });
       });
-      element('logout').addEventListener('click', () => void update('logout'));
-      element('preview').addEventListener('click', () => {
-        if (!local?.ready || local.day !== boardDay()) return;
-        preview = local;
-        render('');
-      });
-      element('cancel').addEventListener('click', () => { preview = undefined; render(''); });
-      element('submit').addEventListener('click', () => {
-        if (busy || !preview) return;
-        const { day, tokens } = preview;
-        preview = undefined;
-        void update('submit', { day, tokens });
-      });
-      const uploadInterval = element('upload-interval');
-      const uploadEnabled = element('upload-enabled');
-      uploadInterval.addEventListener('input', () => { edited = true; });
-      uploadEnabled.addEventListener('change', () => {
-        if (uploadEnabled.checked && !uploadInterval.reportValidity()) {
-          uploadEnabled.checked = false;
-          return;
-        }
-        const seconds = uploadInterval.validity.valid ? uploadInterval.valueAsNumber : model?.upload?.interval ?? 60;
-        edited = false;
-        void updateUpload(uploadEnabled.checked, seconds);
-      });
-      element('upload-form').addEventListener('submit', event => {
-        event.preventDefault();
-        edited = false;
-        void updateUpload(uploadEnabled.checked, uploadInterval.valueAsNumber);
-      });
+      element('logout').addEventListener('click', () => void logout());
       void refreshSession();
       for (const { days } of periods) void showCache(days);
       const interval = setInterval(() => {
         if (group.hidden) return;
+        const snapshot = session ?? model;
+        renderSyncCountdown(snapshot, snapshot?.signedIn ?? snapshot?.board?.authenticated, Date.now());
         void refresh();
         void refreshSession();
       }, 1000);
