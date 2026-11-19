@@ -11,11 +11,86 @@
         "url": "https://github.com/jecyxyf/Orca-TPS-Plugin.git",
         "ref": "main"
       },
-      "description": "Live request speed, personal token usage, and GitHub leaderboards with multi-device totals for Orca IDE.",
+      "description": "Track live request speed and token usage in Orca. Compare models, spot daily trends, and join a cross-device leaderboard with GitHub sign-in.",
       "categories": [
         "productivity"
       ],
       "releases": [
+        {
+          "version": "1.6.2",
+          "commit": "7ac4757b9f589f12788b497a82dff3f3ac9b043a",
+          "contentHash": "25bf0a67c37a81cadbd2685807485c597914bf002fbe7039e5610da854ef977a",
+          "execution": "trusted-worker",
+          "minimumOrca": "1.4.251",
+          "name": "TPS Plugion",
+          "contributes": [
+            {
+              "kind": "panels",
+              "name": "TPS Plugin"
+            },
+            {
+              "kind": "commands",
+              "name": "Refresh TPS Data"
+            },
+            {
+              "kind": "events",
+              "name": "workspace.changed"
+            },
+            {
+              "kind": "statusBarItems",
+              "name": "🚀 — tokens/s · 🍪 Cache hit —"
+            }
+          ],
+          "capabilities": [
+            "storage:own",
+            "workspace:read",
+            "secrets:own"
+          ],
+          "images": {
+            "icon": {
+              "path": "assets/icon.png",
+              "alt": "TPS Plugion",
+              "sha256": "8e1501049b18c550b66ffcc02843db683d5752d3816cd719893a737f34e27a15",
+              "width": 256,
+              "height": 256
+            },
+            "cover": {
+              "path": "assets/1.6.2/cover.png",
+              "alt": "The three TPS Plugion tabs in the Orca sidebar: Current Data, Personal Stats, and Leaderboard",
+              "sha256": "304a84548dd66d793421ccdd579bda9115244bf9edecc8a4c0152b44e983c85a",
+              "width": 1600,
+              "height": 1000
+            },
+            "screenshots": [
+              {
+                "path": "assets/1.6.2/current-data.png",
+                "alt": "Orca sidebar request cards showing generation speed, first-token latency, output, and cache hit rate",
+                "sha256": "29a964e45f19bd79fa38c68d04ac9d4f3641656a9108f8249d28c964dfce18f8",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.2/personal-stats.png",
+                "alt": "Personal Stats shows usage by model, average generation speeds, and an annual heatmap",
+                "sha256": "6bbd9aef0e6275f3a9ba34a8c571ec7e2bf68c84df442bd7cb715848426460ab",
+                "width": 1600,
+                "height": 1000
+              },
+              {
+                "path": "assets/1.6.2/leaderboard.png",
+                "alt": "Leaderboard with GitHub avatars, three ranking periods, medals, and the sync controls",
+                "sha256": "c01570b5fadf01d12ae7bb544dcf2a61eb6cb0a715d15577f840a1ef340177f6",
+                "width": 1600,
+                "height": 1000
+              }
+            ]
+          },
+          "license": "MIT",
+          "repository": "https://github.com/jecyxyf/Orca-TPS-Plugin",
+          "homepage": "https://github.com/jecyxyf/Orca-TPS-Plugin#readme",
+          "updatedAt": "2026-11-19T17:19:54+08:00",
+          "changelog": "Adds Hermes Agent support and a ten-language interface. Background processing keeps tab changes responsive. The leaderboard has GitHub avatars, period medals, and manual sync. The listing includes an updated cover and three feature screenshots."
+        },
         {
           "version": "1.6.1",
           "commit": "03eeddb3b0055825436f35ea3e425b1766c55725",
