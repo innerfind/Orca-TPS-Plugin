@@ -67,14 +67,18 @@ function createOrcaRpc() {
   delete cliEnv.ORCA_ENVIRONMENT;
   delete cliEnv.ORCA_PAIRING_CODE;
   const windows = process.platform === 'win32';
+  const linux = process.platform === 'linux';
   if (windows) {
     // Orca's worker may omit these even though its CLI needs the profile directories.
     cliEnv.APPDATA ||= path.join(homedir(), 'AppData', 'Roaming');
     cliEnv.LOCALAPPDATA ||= path.join(homedir(), 'AppData', 'Local');
   }
   const cliName = windows ? 'orca.exe' : 'orca';
+  const bundledBin = path.join(path.dirname(process.execPath), 'resources', 'bin');
   const paths = [
-    path.join(path.dirname(process.execPath), 'resources', 'bin', cliName),
+    // The Linux AppImage puts its Electron binary ahead of the CLI on the worker's PATH.
+    ...(linux ? [path.join(bundledBin, 'orca-ide')] : []),
+    path.join(bundledBin, cliName),
     ...(windows
       ? [path.join(cliEnv.LOCALAPPDATA, 'Programs', 'orca', 'resources', 'bin', cliName)]
       : []),
@@ -82,7 +86,7 @@ function createOrcaRpc() {
       path.resolve(path.dirname(process.execPath), '..', 'Resources', 'bin', cliName),
       '/Applications/Orca.app/Contents/Resources/bin/orca'
     ] : []),
-    ...(process.platform === 'linux' ? [
+    ...(linux ? [
       'orca-ide',
       path.join(process.env.XDG_CONFIG_HOME || path.join(homedir(), '.config'), 'orca', 'linux-orca-cli-shim', 'orca')
     ] : []),
