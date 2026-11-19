@@ -8,12 +8,15 @@ import { startLeaderboard } from './leaderboard.mjs';
 
 // Backfill runs quickly while files are pending; once every unit is current, refresh slowly.
 const BACKFILL_DELAY_MS = 15_000, IDLE_DELAY_MS = 60_000, FIRST_DELAY_MS = 3_000;
+const PANEL_VIEW_KEY = 'panel-view';
+const PANEL_VIEWS = new Set(['current-data', 'usage', 'leaderboard']);
 
-let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, stopLeaderboard, running = false;
+let controller, remote, local, cache, usage, remoteUsage, usageAbort, timer, handler, stopLeaderboard, stopPanelView, running = false;
 
 export default async function activate(orca) {
   await deactivate();
   running = true;
+  stopPanelView = registerPanelView(orca);
   const remoteReader = remote = createRemoteChannelReader(orca);
   const localReader = local = createLiveSessionReader();
   const channelCache = cache = createChannelCache(orca.storage);
@@ -62,6 +65,28 @@ export default async function activate(orca) {
   schedule(orca, FIRST_DELAY_MS);
 }
 
+function registerPanelView(orca) {
+  const saved = orca.storage.get(PANEL_VIEW_KEY).catch(() => undefined);
+  let selected, writing = Promise.resolve();
+  const registration = orca.panels.handle('tps.panel-view', async payload => {
+    const view = payload?.view;
+    if (PANEL_VIEWS.has(view) && view !== selected) {
+      selected = view;
+      writing = writing.then(() => orca.storage.set(PANEL_VIEW_KEY, view)).catch(() => {
+        orca.log('未能保存面板分栏。');
+      });
+      await writing;
+    }
+    if (selected) return { view: selected };
+    const restored = await saved;
+    return { view: selected ?? (PANEL_VIEWS.has(restored) ? restored : null) };
+  });
+  return () => {
+    registration.dispose();
+    return writing;
+  };
+}
+
 function schedule(orca, delay) {
   clearTimeout(timer);
   timer = setTimeout(() => void tick(orca), delay);
@@ -87,6 +112,8 @@ export async function deactivate() {
   timer = undefined;
   handler?.dispose?.();
   handler = undefined;
+  const panelViewWrite = stopPanelView?.();
+  stopPanelView = undefined;
   stopLeaderboard?.();
   stopLeaderboard = undefined;
   controller?.stop();
@@ -102,5 +129,5 @@ export async function deactivate() {
   local = undefined;
   const channelCache = cache;
   cache = undefined;
-  await Promise.all([remoteReader?.dispose(), history?.dispose(), channelCache?.flush()]);
+  await Promise.all([remoteReader?.dispose(), history?.dispose(), channelCache?.flush(), panelViewWrite]);
 }

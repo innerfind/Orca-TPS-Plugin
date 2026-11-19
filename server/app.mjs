@@ -12,7 +12,7 @@ const digest = value => createHash('sha256').update(value).digest('hex');
 const challengeOf = value => createHash('sha256').update(value).digest('base64url');
 const tokenPattern = /^[\w-]{43}$/;
 const dayPattern = /^\d{4}-\d{2}-\d{2}$/;
-const statuses = { accepted: 201, initialized: 200, invalid: 400, duplicate: 409, removed: 409, too_soon: 429, locked: 429, banned: 403 };
+const statuses = { accepted: 201, initialized: 200, invalid: 400, duplicate: 409, removed: 409, upgrade_required: 409, too_soon: 429, locked: 429, banned: 403 };
 const feedback = { updated: '已保存。', rejected: '操作未执行，请检查输入。', forbidden: '该 GitHub 账号没有管理权限。', failed: 'GitHub 登录未完成，请重新登录。' };
 
 function cookieValue(req, name) {
@@ -387,7 +387,7 @@ export function createLeaderboardServer({
       const validRequestId = typeof requestId === 'string' && /^[\w-]{16,128}$/.test(requestId);
       const body = validRequestId && req.headers['content-type']?.split(';')[0] === 'application/json' ? parseJson(raw) : null;
       const input = {
-        day: body?.day, tokens: body?.tokens, scores: body?.scores,
+        day: body?.day, installationId: body?.installationId, tokens: body?.tokens, scores: body?.scores,
         requestId: (history ? 'history:' : '') + (validRequestId ? requestId : randomUUID()),
         fingerprint: digest(raw ?? 'oversized request')
       };

@@ -2,8 +2,8 @@
   "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
   "manifestVersion": 2,
   "id": "tps-stats",
-  "name": "Orca 软件 Tokens 统计插件",
-  "version": "1.5.1",
+  "name": "TPS Plugion",
+  "version": "1.6.0",
   "description": "Real-time token usage, per-request TPS, TTFT, and prompt-cache hit rate statistics plugin for Orca IDE (Claude Code, Codex, OpenCode, Pi), powered by CC Switch metrics.",
   "author": {
     "name": "jecyxyf",

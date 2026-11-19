@@ -94,23 +94,28 @@
     .ladder-refresh-time { font-variant-numeric: tabular-nums; }
     .ladder-tabs { margin-top: 6px; }
     .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+    .ladder-control { min-height: 36px; padding-inline: 12px; font-size: 13px; font-weight: 700; }
     .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
     .ladder-primary { color: var(--surface); background: var(--blue); }
     .ladder-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
     .ladder-actions .ladder-note { margin: 0; }
     .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .ladder-status:empty, .ladder-mine:empty { display: none; }
-    .ladder-user-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: start; }
-    .ladder-identity { display: flex; grid-column: 1 / -1; gap: 4px 7px; align-items: center; flex-wrap: wrap; min-width: 0; }
-    .ladder-user-stat { min-width: 0; margin: 0; padding-inline-start: 8px; border-inline-start: 1px solid var(--line); }
-    .ladder-user-stat dt { color: var(--muted); font-size: 11px; }
+    .ladder-identity { display: flex; justify-content: space-between; gap: 8px; align-items: center; min-width: 0; }
+    .ladder-user-grid, .ladder-badges { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); column-gap: 8px; }
+    .ladder-user-grid { margin-top: 12px; row-gap: 5px; align-items: start; }
+    .ladder-user-stat { min-width: 0; margin: 0; padding-inline: 2px; text-align: center; }
+    .ladder-user-stat + .ladder-user-stat { border-inline-start: 1px solid var(--line); }
+    .ladder-user-stat dt { color: var(--muted); font-size: 13px; }
     .ladder-user-stat dd { margin: 1px 0 0; font-variant-numeric: tabular-nums; }
-    .ladder-user-rank { font-weight: 700; }
-    .ladder-user-tokens { color: var(--blue); font-size: 11px; overflow-wrap: anywhere; }
-    .ladder-mine { min-width: 0; margin: 0; color: var(--purple); font-size: 22px; font-weight: 800; line-height: 1.25; letter-spacing: -.3px; overflow-wrap: anywhere; }
-    .ladder-account-actions { margin-top: 8px; }
-    .ladder-badges { display: flex; flex-wrap: wrap; gap: 3px 4px; align-items: center; }
-    .ladder-badges:empty { display: none; }
+    .ladder-user-rank { font-size: 16px; font-weight: 750; }
+    .ladder-user-tokens { color: var(--blue); font-size: 14px; font-weight: 650; overflow-wrap: anywhere; }
+    .ladder-mine {
+      min-width: 0; margin: 0; color: var(--purple); font-size: 24px; font-weight: 800; line-height: 1.25;
+      letter-spacing: -.3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ladder-badges { grid-column: 1 / -1; }
+    .ladder-badge-slot { display: grid; place-items: center; min-height: 48px; }
     .ladder-medal {
       position: relative; display: inline-block; flex-shrink: 0; width: 48px; height: 48px;
       filter: drop-shadow(0 1px 1px rgb(0 0 0 / 25%));
@@ -203,6 +208,8 @@
     .ladder-preview p { margin: 0 0 6px; }
     .ladder-preview .ladder-note { margin-bottom: 8px; }
     .ladder-upload { margin-top: 7px; }
+    .ladder-upload-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
+    .ladder-confirmation { margin-top: 8px; }
     .ladder-upload-feedback {
       display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: baseline;
       font-variant-numeric: tabular-nums;
@@ -342,7 +349,9 @@
       .speed { padding: 5px 8px; gap: 3px; }
       .speed-value { font-size: 17px; }
       .war, .heat, .ladder-card { padding-inline: 12px; }
-      .ladder-mine { font-size: 20px; }
+      .ladder-mine { font-size: 22px; }
+      .ladder-user-grid, .ladder-badges { column-gap: 2px; }
+      .ladder-user-stat { padding-inline: 0; }
       .war-totals { gap: 6px; }
       .war-value { font-size: 17px; }
       .ladder-total { padding-inline: 6px; font-size: 12px; }
@@ -358,15 +367,15 @@
   <main id="panel" aria-labelledby="panel-title">
     <h1 id="panel-title">TPS Plugin</h1>
     <div class="panel-tabs" id="panel-tabs" role="tablist" aria-label="TPS Plugin 功能">
-      <button class="panel-tab" id="tab-current" type="button" role="tab" aria-controls="current-data" aria-selected="true">当前数据</button>
+      <button class="panel-tab" id="tab-current" type="button" role="tab" aria-controls="current-data" aria-selected="false">当前数据</button>
       <button class="panel-tab" id="tab-usage" type="button" role="tab" aria-controls="usage" aria-selected="false" tabindex="-1">个人统计</button>
       <button class="panel-tab" id="tab-leaderboard" type="button" role="tab" aria-controls="leaderboard" aria-selected="false" tabindex="-1">天梯榜</button>
     </div>
     <section class="panel-view" id="leaderboard" role="tabpanel" aria-labelledby="tab-leaderboard" tabindex="0" hidden>
       <div class="ladder-card" id="ladder-controls" hidden>
-        <div id="ladder-sign-in" class="ladder-actions" hidden>
-          <button class="refresh" id="ladder-login" type="button" disabled>用 GitHub 登录</button>
-          <span class="ladder-note">登录后可上传今日用量。</span>
+        <div id="ladder-sign-in" class="ladder-identity" hidden>
+          <p class="ladder-mine">未登录</p>
+          <button class="refresh ladder-control" id="ladder-login" type="button" disabled>用 GitHub 登录</button>
         </div>
         <div class="ladder-preview" id="ladder-login-wait" hidden>
           <p>请在浏览器完成 GitHub 授权。授权成功后榜单会自动更新。</p>
@@ -375,10 +384,15 @@
           </div>
         </div>
         <div id="ladder-account" hidden>
+          <div class="ladder-identity">
+            <p class="ladder-mine" id="ladder-mine"></p>
+            <button class="refresh ladder-control" id="ladder-logout" type="button">退出登录</button>
+          </div>
           <div class="ladder-user-grid" aria-label="个人榜单数据">
-            <div class="ladder-identity">
-              <p class="ladder-mine" id="ladder-mine"></p>
-              <span class="ladder-badges" id="ladder-medals"></span>
+            <div class="ladder-badges" id="ladder-medals" hidden>
+              <div class="ladder-badge-slot" id="ladder-user-badge-1"></div>
+              <div class="ladder-badge-slot" id="ladder-user-badge-7"></div>
+              <div class="ladder-badge-slot" id="ladder-user-badge-30"></div>
             </div>
             <dl class="ladder-user-stat"><dt>今日排名</dt>
               <dd class="ladder-user-rank" id="ladder-user-rank-1">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-1" title="今日榜单用量">—</dd>
@@ -390,7 +404,6 @@
               <dd class="ladder-user-rank" id="ladder-user-rank-30">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-30" title="30 天榜单用量">—</dd>
             </dl>
           </div>
-          <button class="refresh ladder-secondary ladder-account-actions" id="ladder-logout" type="button">退出登录</button>
         </div>
         <p class="ladder-status" id="ladder-status" role="status"></p>
       </div>
@@ -403,14 +416,16 @@
             <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" aria-label="上传间隔（秒）" required disabled>
             秒
           </label>
-          <button class="refresh ladder-secondary" id="ladder-save-upload" type="submit" disabled>保存设置</button>
-          <button class="refresh ladder-primary" id="ladder-preview" type="button" disabled>手动上传</button>
+          <div class="ladder-upload-buttons">
+            <button class="refresh ladder-control" id="ladder-save-upload" type="submit" disabled>保存设置</button>
+            <button class="refresh ladder-control" id="ladder-preview" type="button" disabled>手动上传</button>
+          </div>
         </form>
         <div class="ladder-upload-feedback">
           <p class="ladder-note" id="ladder-upload-note"></p>
           <p class="ladder-note ladder-upload-result" id="ladder-upload-result" role="status" hidden></p>
         </div>
-        <div class="ladder-preview ladder-account-actions" id="ladder-confirmation" hidden>
+        <div class="ladder-preview ladder-confirmation" id="ladder-confirmation" hidden>
           <p id="ladder-preview-text"></p>
           <p class="ladder-note">上传会更新当天的成绩。</p>
           <div class="ladder-actions">
@@ -490,7 +505,7 @@
         <div class="heat-tip" id="heat-tip" role="tooltip" hidden></div>
       </section>
     </section>
-    <section class="panel-view" id="current-data" role="tabpanel" aria-labelledby="tab-current" tabindex="0">
+    <section class="panel-view" id="current-data" role="tabpanel" aria-labelledby="tab-current" tabindex="0" hidden>
       <div class="panel-header">
         <p class="summary panel-summary" id="summary">当前频道 · 最近 0 次请求</p>
         <button class="refresh" id="refresh" data-testid="refresh" type="button" aria-label="刷新当前数据">
@@ -568,15 +583,26 @@
       const byId = id => document.getElementById(id);
       const ui = Object.fromEntries(['current-data', 'summary', 'refresh', 'error', 'warnings', 'loading', 'records', 'empty', 'empty-text', 'updated', 'record-template'].map(id => [id, byId(id)]));
       const views = [...byId('panel-tabs').children];
+      const lifetime = new AbortController();
+      const bridge = window.orca?.plugin;
+      let activeTab;
+      function openView(tab) {
+        activeTab = tab;
+        for (const view of views) {
+          const selected = view === tab;
+          view.setAttribute('aria-selected', String(selected));
+          view.tabIndex = selected ? 0 : -1;
+          byId(view.getAttribute('aria-controls')).hidden = !selected;
+        }
+        byId(tab.getAttribute('aria-controls')).dispatchEvent(new Event('tps-view-opened'));
+      }
       for (const [index, tab] of views.entries()) {
         tab.addEventListener('click', () => {
-          for (const view of views) {
-            const selected = view === tab;
-            view.setAttribute('aria-selected', String(selected));
-            view.tabIndex = selected ? 0 : -1;
-            byId(view.getAttribute('aria-controls')).hidden = !selected;
+          const changed = tab !== activeTab;
+          openView(tab);
+          if (changed && typeof bridge?.request === 'function') {
+            void bridge.request('tps.panel-view', { view: tab.getAttribute('aria-controls') }, { timeoutMs: 3000 }).catch(() => {});
           }
-          byId(tab.getAttribute('aria-controls')).dispatchEvent(new Event('tps-view-opened'));
         });
         tab.addEventListener('keydown', event => {
           const next = {
@@ -591,7 +617,6 @@
           views[next].click();
         });
       }
-      const lifetime = new AbortController();
       const retiredInstances = new Set();
       const subscriptions = [];
       let current = null;
@@ -601,7 +626,15 @@
       let disposed = false;
       let drawnRecords = '';
       let resetScroll = false;
-      const bridge = window.orca?.plugin;
+      document.addEventListener('DOMContentLoaded', async () => {
+        if (activeTab) return;
+        const saved = typeof bridge?.request === 'function'
+          ? await bridge.request('tps.panel-view', undefined, { signal: lifetime.signal, timeoutMs: 3000 }).catch(() => null)
+          : null;
+        if (!activeTab && !lifetime.signal.aborted) {
+          openView(views.find(tab => tab.getAttribute('aria-controls') === saved?.view) ?? views[0]);
+        }
+      }, { once: true });
 
       const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
       const outputKBFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 3 });
@@ -1024,6 +1057,7 @@
       const messages = {
         unavailable: '连不上榜单服务器，请稍后重试。', github_unavailable: '榜单暂时无法完成 GitHub 登录。',
         login_required: '用 GitHub 登录后即可提交。', banned: '这个 GitHub 账号已被封禁，无法提交。',
+        installation_unavailable: '无法保存本机插件编号，请稍后重试。', upgrade_required: '请更新 TPS 插件后再上传。',
         session_expired: '登录已失效，请重新登录。',
         login_expired: '登录请求已过期，请重新登录。', login_denied: 'GitHub 授权已取消。',
         browser_unavailable: '没有打开浏览器，请重新点击登录。', signed_in: '已登录。', signed_out: '已退出登录。',
@@ -1039,7 +1073,7 @@
       let model, session, local, preview, pendingLogin, retryLogin, rankDays = 1;
       const cachedRankings = new Map(), refreshing = new Set();
       let busy = false, savingUpload = false, readingUsage = false, restoringSession = false, edited = false;
-      let revision = 0, drawnRows = '', drawnMedals = '', renderedDay = '', loginProblem = '', messageCode = '';
+      let revision = 0, drawnRows = '', renderedDay = '', loginProblem = '', messageCode = '';
       let summaryAccount = '', summaryUpload = null;
 
       async function request(action, payload = {}) {
@@ -1112,7 +1146,7 @@
         const identity = element('mine');
         identity.textContent = username || '已登录';
         identity.title = username ?? '';
-        const ranks = [];
+        let hasMedals = false;
         for (const period of periods) {
           const ranking = cachedRankings.get(period.days);
           const row = username && ranking?.day === renderedDay ? ranking.rows.find(row => row.username === username) : null;
@@ -1121,12 +1155,15 @@
           const tokens = freshToday ? account.tokens : row?.tokens;
           element('user-rank-' + period.days).textContent = row ? '第 ' + row.rank + ' 名' : '—';
           element('user-tokens-' + period.days).textContent = formatTokenMB(tokens);
-          ranks.push(row?.rank);
+          const place = row?.rank >= 1 && row.rank <= podium.length ? row.rank : 0;
+          if (place) hasMedals = true;
+          const slot = element('user-badge-' + period.days);
+          if (Number(slot.dataset.place ?? 0) === place) continue;
+          slot.dataset.place = place;
+          slot.querySelector('.ladder-medal')?.remove();
+          if (place) slot.append(medal(place, period));
         }
-        const signature = JSON.stringify(ranks);
-        if (signature === drawnMedals) return;
-        drawnMedals = signature;
-        element('medals').replaceChildren(...ranks.map((rank, index) => medal(rank, periods[index])).filter(Boolean));
+        element('medals').hidden = !hasMedals;
       }
 
       function renderUpload(snapshot, signedIn, time) {
@@ -1232,23 +1269,20 @@
       }
 
       async function refreshSession() {
-        if (group.hidden || restoringSession || busy || savingUpload || lifetime.signal.aborted) return;
+        if (restoringSession || busy || savingUpload || lifetime.signal.aborted) return;
         restoringSession = true;
         const requestedAt = revision;
         try {
           const result = await request('session');
           if (lifetime.signal.aborted || revision !== requestedAt || typeof result.signedIn !== 'boolean') return;
-          if (result.signedIn !== model?.signedIn || result.board?.username !== (session ?? model)?.board?.username) showState(result);
-          else {
-            session = result;
-            render();
-            showSummaries();
-          }
+          session = result;
+          render();
+          void refreshUsage();
         } finally { restoringSession = false; }
       }
 
       async function refreshUsage() {
-        if (readingUsage || group.hidden || !model?.signedIn || lifetime.signal.aborted) return;
+        if (readingUsage || !(session ?? model)?.signedIn || lifetime.signal.aborted) return;
         readingUsage = true;
         try {
           const result = await request('usage');
@@ -1268,12 +1302,13 @@
       }
 
       function showState(result, days = rankDays) {
+        const wasSignedIn = (session ?? model)?.signedIn;
         model = result.board ? result : { ...model, days, board: { code: result.code } };
         if (typeof result.signedIn === 'boolean') session = result;
         cacheRanking(result, days);
         render(result.code ?? '');
         showSummaries();
-        void refreshUsage();
+        if (!wasSignedIn) void refreshUsage();
       }
 
       function showSummaries() {
@@ -1310,11 +1345,9 @@
         } finally { refreshing.delete(days); }
       }
 
-      function showRanking() {
+      function showCachedRanking() {
         render('');
-        void refreshSession();
         void showCache();
-        if (Date.now() - (cachedRankings.get(rankDays)?.updatedAt ?? 0) >= 1000) void refresh();
       }
 
       async function update(action, details) {
@@ -1377,9 +1410,9 @@
         if (days === rankDays) return;
         rankDays = days;
         for (const tab of rankTabs) tab.setAttribute('aria-pressed', String(Number(tab.dataset.rankDays) === days));
-        showRanking();
+        showCachedRanking();
       });
-      group.addEventListener('tps-view-opened', showRanking);
+      group.addEventListener('tps-view-opened', showCachedRanking);
       element('update').addEventListener('click', async () => {
         const button = element('update');
         button.classList.add('is-busy');
@@ -1462,7 +1495,10 @@
         edited = false;
         void updateUpload(uploadEnabled.checked, uploadInterval.valueAsNumber);
       });
+      void refreshSession();
+      for (const { days } of periods) void showCache(days);
       const interval = setInterval(() => {
+        if (group.hidden) return;
         void refresh();
         void refreshSession();
       }, 1000);

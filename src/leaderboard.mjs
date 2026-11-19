@@ -1,9 +1,11 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { leaderboardDay } from './usage-summary.mjs';
+import { validInstallationId } from './leaderboard-installation.mjs';
 
 const METHOD = 'tps.leaderboard';
 const SECRET = 'leaderboard-session';
 const ACCOUNT_CACHE = 'leaderboard:account';
+const INSTALLATION = 'leaderboard:installation-id';
 const UPLOAD = 'leaderboard:upload';
 const HISTORY = 'leaderboard:history';
 const RANKING_CACHE = 'leaderboard:ranking';
@@ -47,8 +49,24 @@ export function startLeaderboard(orca, {
   const rankingCaches = new Map();
   let rankingRequest = 0;
   let lastUpload = null;
+  let installationReady;
   const secretAvailable = method => orca.grantedCapabilities?.includes('secrets:own') && host?.has(method);
   const today = () => leaderboardDay(now().getTime());
+
+  function installationId() {
+    installationReady ??= (async () => {
+      const saved = await orca.storage.get(INSTALLATION);
+      if (validInstallationId(saved)) return saved;
+      const created = randomUUID();
+      await orca.storage.set(INSTALLATION, created);
+      return created;
+    })().catch(() => {
+      installationReady = undefined;
+      return null;
+    });
+    return installationReady;
+  }
+  void installationId();
 
   function rankingCache(days) {
     if (rankingCaches.has(days)) return rankingCaches.get(days);
@@ -281,7 +299,9 @@ export function startLeaderboard(orca, {
     if (!token) return { code: 'login_required' };
     const credential = token;
     if (!preview?.ready || !Number.isSafeInteger(preview.tokens) || preview.tokens < 1) return { code: 'usage_unready' };
-    if (!stillEnabled()) return { code: 'upload_disabled' };
+    const id = await installationId();
+    if (!id) return { code: 'installation_unavailable' };
+    if (!stillEnabled() || token !== credential || lifetime.signal.aborted) return { code: 'upload_disabled' };
     if (preview.day !== today()) return { code: 'new_day' };
     const status = uploadStatus?.day === preview.day ? uploadStatus : {};
     const time = now().getTime();
@@ -291,7 +311,7 @@ export function startLeaderboard(orca, {
     if (nextUploadAt > time) return { code: 'too_soon', ...status, nextUploadAt };
 
     const requestId = randomUUID();
-    const options = { requestId, body: { day: preview.day, tokens: preview.tokens } };
+    const options = { requestId, body: { day: preview.day, installationId: id, tokens: preview.tokens } };
     let result = await request('/api/today/submit', options);
     if (result.code === 'unavailable' && token === credential && stillEnabled()) result = await request('/api/today/submit', options);
     if (token === credential) rememberUpload(result);
@@ -342,8 +362,11 @@ export function startLeaderboard(orca, {
       const snapshot = await readHistory();
       if (!active() || !snapshot.ready || snapshot.day !== today() || submitting) return;
       if (!snapshot.scores.length) return setHistoryJob(undefined);
+      const id = await installationId();
+      if (!active() || snapshot.day !== today() || submitting) return;
+      if (!id) return recordUpload('history', 'installation_unavailable');
       const attempt = request('/api/history/init', {
-        requestId: randomUUID(), body: { day: snapshot.day, scores: snapshot.scores }
+        requestId: randomUUID(), body: { day: snapshot.day, installationId: id, scores: snapshot.scores }
       });
       submitting = attempt;
       let result;

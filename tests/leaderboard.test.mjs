@@ -70,8 +70,8 @@ async function fixture(t, names = ['alice', 'bob']) {
     assert.equal(response.status, 200);
     return (await response.json()).token;
   }
-  const submit = (token, tokens, requestId = randomUUID(), day = leaderboardDay(clock)) => post(
-    '/api/today/submit', { day, tokens }, { ...bearer(token), 'Idempotency-Key': requestId }
+  const submit = (token, tokens, requestId = randomUUID(), day = leaderboardDay(clock), installationId) => post(
+    '/api/today/submit', { day, tokens, installationId }, { ...bearer(token), 'Idempotency-Key': requestId }
   );
 
   async function websiteLogin(githubName) {
@@ -209,6 +209,79 @@ test('weekly and monthly rankings total the latest score per Beijing day', async
   assert.equal((await (await api.get(alice)).json()).tokens, 300);
 });
 
+test('same-day installations contribute separately and legacy totals are never counted twice', async t => {
+  const api = await fixture(t, ['alice', 'alice']);
+  api.advance(-86_400_000);
+  const alice = await api.login();
+  assert.equal((await api.submit(alice, 25)).status, 201);
+  api.advance(86_400_000);
+  const other = await api.login();
+  assert.equal((await api.submit(alice, 90)).status, 201);
+  api.advance(10_000);
+
+  const a = randomUUID(), b = randomUUID(), first = randomUUID();
+  assert.equal((await api.submit(alice, 100, first, TODAY, a)).status, 201);
+  assert.equal((await (await api.get(other)).json()).tokens, 100);
+  const simultaneous = await api.submit(other, 60, undefined, TODAY, b);
+  assert.equal((await simultaneous.json()).code, 'too_soon');
+  api.advance(10_000);
+  assert.equal((await api.submit(other, 60, undefined, TODAY, b)).status, 201);
+  assert.equal((await (await api.get(alice)).json()).tokens, 160);
+  assert.equal((await api.submit(alice, 100, first, TODAY, a)).status, 201);
+  api.advance(10_000);
+  assert.equal((await api.submit(alice, 120, undefined, TODAY, a)).status, 201);
+  api.advance(10_000);
+  assert.equal((await (await api.submit(other, 90)).json()).code, 'upgrade_required');
+  const daily = await (await api.get(alice)).json();
+  assert.equal(daily.tokens, 180);
+  assert.deepEqual(daily.rows.map(row => [row.username, row.tokens]), [['alice', 180]]);
+  for (const days of [7, 30]) {
+    const board = await (await api.get(alice, '/api/today?days=' + days)).json();
+    assert.deepEqual(board.rows.map(row => [row.username, row.tokens]), [['alice', 205]]);
+  }
+  const admin = await api.websiteLogin('admin');
+  await api.form('/admin/delete', admin.cookie, { account: '1', day: TODAY });
+  assert.equal((await (await api.submit(alice, 150, undefined, TODAY, a)).json()).code, 'removed');
+  assert.equal((await (await api.get(alice, '/api/today?days=30')).json()).rows[0].tokens, 25);
+});
+
+test('history still imports once and the first installation can update its imported daily total', async t => {
+  const api = await fixture(t, ['alice', 'alice']);
+  const alice = await api.login(), other = await api.login();
+  const a = randomUUID(), b = randomUUID();
+  const init = (token, installationId, tokens) => api.call('/api/history/init', {
+    method: 'POST', body: JSON.stringify({ day: TODAY, installationId, scores: [{ day: TODAY, tokens }] }),
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json', 'Idempotency-Key': randomUUID() }
+  });
+  assert.equal((await init(alice, a, 100)).status, 201);
+  assert.equal((await (await init(other, b, 200)).json()).code, 'initialized');
+  api.advance(10_000);
+  assert.equal((await api.submit(alice, 120, undefined, TODAY, a)).status, 201);
+  assert.equal((await (await api.get(alice)).json()).tokens, 120);
+  api.advance(10_000);
+  assert.equal((await api.submit(other, 60, undefined, TODAY, b)).status, 201);
+  assert.equal((await (await api.get(alice)).json()).tokens, 180);
+});
+
+test('simultaneous installations share the cooldown without accumulating one another’s rapid attempts', async t => {
+  const api = await fixture(t);
+  const token = await api.login();
+  const installationId = randomUUID();
+  assert.equal((await (await api.submit(token, 100, undefined, TODAY, 'wrong-id')).json()).code, 'invalid');
+  assert.equal((await api.submit(token, 100, undefined, TODAY, installationId)).status, 201);
+  for (let index = 0; index < 5; index++) {
+    const reply = await api.submit(token, 50, undefined, TODAY, randomUUID());
+    assert.equal((await reply.json()).code, 'too_soon');
+  }
+  for (let index = 0; index < 3; index++) {
+    api.advance(1000);
+    assert.equal((await api.submit(token, 100, undefined, TODAY, installationId)).status, 429);
+  }
+  api.advance(1000);
+  assert.equal((await api.submit(token, 100, undefined, TODAY, installationId)).status, 403);
+  assert.equal((await (await api.get(token)).json()).banned, true);
+});
+
 test('initialization imports missing days once across devices and respects removed scores', async t => {
   const api = await fixture(t, ['alice', 'alice']);
   const dayLength = 86_400_000;
@@ -339,6 +412,7 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   const api = await fixture(t);
   const storage = new Map(), secrets = new Map(), handlers = new Map();
   const requests = [];
+  const installationIds = [];
   const orca = {
     storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
     host: { has: () => true, call: async (method, { key, value }) => {
@@ -355,6 +429,7 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
     readUsage: async () => ({ day: TODAY, tokens, ready: true }),
     fetcher: (url, options) => {
       requests.push({ path: url.pathname, method: options.method, authenticated: Boolean(options.headers.Authorization) });
+      if (url.pathname === '/api/today/submit') installationIds.push(JSON.parse(options.body).installationId);
       return fetch(url, options);
     }
   });
@@ -362,6 +437,8 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   t.after(() => stop());
   const run = (action, fields = {}) => handlers.get('tps.leaderboard')({ action, ...fields });
   const initial = await run('state');
+  const installationId = storage.get('leaderboard:installation-id');
+  assert.match(installationId, /^[\da-f-]{36}$/);
   assert.equal(initial.board.authenticated, false);
   assert.deepEqual(initial.upload, { enabled: false, interval: 60 });
   assert.equal((await run('upload', { enabled: true, interval: 10 })).code, 'login_required');
@@ -408,6 +485,7 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   api.advance(1);
   for (let tries = 0; tries < 40 && (await run('state')).board.tokens !== 850; tries++) await delay(50);
   assert.equal((await run('state')).board.tokens, 850);
+  assert.deepEqual(installationIds, [installationId, installationId, installationId]);
   stop();
   stop = launch();
   assert.deepEqual((await run('state')).upload, { enabled: true, interval: 10 });
@@ -574,11 +652,14 @@ test('the plugin restores public rankings without the network and expires them a
   const stored = new Map();
   const row = { rank: 1, username: 'alice', tokens: 5, submittedAt: START };
   const endpoint = 'http://127.0.0.1:6789';
-  let clock = START, offline = false, fetches = 0, writes = 0, handle;
+  let clock = START, offline = false, fetches = 0, rankingWrites = 0, handle;
   const orca = {
     storage: {
       get: async key => stored.get(key),
-      set: async (key, value) => { writes++; stored.set(key, value); }
+      set: async (key, value) => {
+        if (key.startsWith('leaderboard:ranking')) rankingWrites++;
+        stored.set(key, value);
+      }
     },
     panels: { handle: (_, callback) => { handle = callback; return { dispose() {} }; } }
   };
@@ -599,8 +680,8 @@ test('the plugin restores public rankings without the network and expires them a
   assert.equal(fetches, 0);
   assert.equal((await run('state')).board.rows[0].mine, false);
   assert.equal((await run('state')).board.authenticated, false);
-  assert.equal(writes, 1);
-  assert.deepEqual([...stored.values()], [{ origin: endpoint, day: TODAY, rows: [row], updatedAt: START }]);
+  assert.equal(rankingWrites, 1);
+  assert.deepEqual(stored.get('leaderboard:ranking'), { origin: endpoint, day: TODAY, rows: [row], updatedAt: START });
   assert.deepEqual(await run('cache', 7), { ranking: null });
   assert.equal((await run('state', 7)).board.rows[0].tokens, 35);
   assert.equal((await run('state', 30)).board.rows[0].tokens, 150);
