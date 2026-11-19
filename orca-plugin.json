@@ -3,7 +3,7 @@
   "manifestVersion": 2,
   "id": "tps-stats",
   "name": "TPS Plugin",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "description": "Track live request speed and token usage in Orca. Compare models, spot daily trends, and join a cross-device leaderboard with GitHub sign-in.",
   "author": {
     "name": "jecyxyf",

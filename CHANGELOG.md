@@ -16,6 +16,12 @@ All notable changes to this project will be documented in this file.
 - **Usage totals panel and yearly heatmap**: 当日战况, 近一周战况 and 近一月战况 at the top of the panel, showing total tokens (new input, output, cache writes and cache reads, matching CC Switch's real total), cache hit rate and request counts, with a per-agent and per-model breakdown. A GitHub-style heatmap of the last year shows daily totals on hover. Totals come from an incremental background index of local session files (Codex, Claude Code including subagents, Pi, OpenCode sessions, and Antigravity conversations). Each file is read once and re-read only when it changes (large, still-growing files at most every 10 minutes); Codex rollouts stream through the incremental parser; identical Codex rollouts copied into Orca's managed home are counted once.
 - **Model average speed ranking** (模型均速): inside the 用量统计 group, models are ranked by their mean per-request output speed (tokens/s) over the selected 当日 / 近一周 / 近一月 window, fastest first. Agents are merged per model; a model needs at least 5 requests in the window to be ranked, and models whose samples are mostly log estimates are marked `≈`. Speeds come from the same local session logs as the totals, so CC Switch proxy speeds are not included. Index units written by earlier versions are re-read once to fill in the speed counters.
 
+## [1.6.4] - 2026-11-19
+
+### Fixed
+
+- Restored live token statistics for remote workspaces in the Linux AppImage by using the bundled Orca CLI.
+
 ## [1.6.3] - 2026-11-19
 
 ### Fixed
