@@ -65,7 +65,7 @@
     "panels": [
       {
         "id": "history",
-        "title": "对话 TPS",
+        "title": "Conversation TPS",
         "icon": "activity",
         "entry": "src/panel.html",
         "ui": "html"
@@ -74,15 +74,15 @@
     "commands": [
       {
         "id": "tps.refresh",
-        "title": "刷新对话 TPS"
+        "title": "Refresh Conversation TPS"
       }
     ],
     "statusBarItems": [
       {
         "id": "speed",
-        "text": "🚀 — tokens/s · 🍪 命中 —",
+        "text": "🚀 — tokens/s · 🍪 Cache hit —",
         "tone": "success",
-        "tooltip": "最新请求速度与缓存命中率（CC Switch 算法）；右侧对话 TPS 查看请求明细，点击刷新。",
+        "tooltip": "Latest request speed and cache hit rate. Open Conversation TPS for details or click to refresh.",
         "command": "tps.refresh"
       }
     ]

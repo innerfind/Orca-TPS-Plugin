@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -52,6 +52,12 @@
       --shadow: 0 3px 12px rgb(0 0 0 / 6%);
     }
     * { box-sizing: border-box; }
+    /* Set the reading direction on text leaves so flex and grid keep their order. */
+    :where(html:lang(ar), html:lang(ur)) :is([data-i18n], [data-localized-text]) {
+      direction: rtl;
+      unicode-bidi: isolate;
+      text-align: match-parent;
+    }
     [hidden] { display: none !important; }
     html { min-width: 0; min-height: 100%; background: var(--page); }
     body {
@@ -70,6 +76,35 @@
     .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .panel-summary { min-width: 0; }
     h1 { margin: 0; font-size: 18px; line-height: 1.4; letter-spacing: -.3px; font-weight: 750; }
+    .title-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; }
+    .language-picker { position: relative; min-width: 0; }
+    .language-toggle, .language-option {
+      display: flex; align-items: center; gap: 7px; min-width: 0; min-height: 32px;
+      padding: 4px 8px; border: 1px solid var(--line); border-radius: 8px;
+      background: var(--surface); color: var(--ink); cursor: pointer;
+    }
+    .language-toggle { max-width: 100%; }
+    .language-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .language-flag { flex: none; width: 20px; height: 14px; object-fit: contain; }
+    .language-toggle svg { flex: none; width: 12px; height: 12px; color: var(--muted); }
+    .language-menu {
+      position: absolute; z-index: 4; top: calc(100% + 5px); right: 0;
+      width: min(216px, calc(100vw - 32px)); padding: 6px;
+      border: 1px solid var(--line); border-radius: 10px;
+      background: var(--surface); box-shadow: 0 5px 18px rgb(0 0 0 / 15%);
+    }
+    .language-search {
+      width: 100%; padding: 6px 8px; margin-bottom: 4px;
+      border: 1px solid var(--line); border-radius: 6px;
+      font: inherit; color: var(--ink); background: var(--page);
+    }
+    .language-toggle:focus-visible, .language-option:focus-visible, .language-search:focus-visible {
+      outline: 2px solid var(--blue); outline-offset: 1px;
+    }
+    .language-options { max-height: 238px; overflow-y: auto; }
+    .language-option { width: 100%; border-color: transparent; text-align: start; }
+    .language-option:hover, .language-option[aria-pressed="true"] { background: var(--button-bg); color: var(--blue); }
+    .language-message { margin: 4px 6px; color: var(--muted); overflow-wrap: anywhere; }
     .summary { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
     .refresh {
       display: inline-flex; align-items: center; justify-content: center; gap: 5px;
@@ -96,8 +131,11 @@
     .ladder-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
     .ladder-control { min-height: 36px; padding-inline: 12px; font-size: 13px; font-weight: 700; }
     .ladder-secondary { color: var(--muted); background: var(--tag-bg); }
-    .ladder-primary { color: var(--surface); background: var(--blue); }
     .ladder-note { margin: 6px 0 0; color: var(--muted); font-size: 11px; }
+    .ladder-sync { display: flex; align-items: baseline; gap: 8px; font-variant-numeric: tabular-nums; }
+    .ladder-sync .ladder-note { min-width: 0; overflow-wrap: anywhere; }
+    .ladder-sync-result { margin-inline-start: auto; text-align: right; }
+    .ladder-sync-result[data-result="failed"] { color: var(--error); }
     .ladder-actions .ladder-note { margin: 0; }
     .ladder-status { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
     .ladder-status:empty, .ladder-mine:empty { display: none; }
@@ -207,16 +245,6 @@
     .ladder-preview { padding: 9px 11px; border-radius: 13px; background: var(--button-bg); }
     .ladder-preview p { margin: 0 0 6px; }
     .ladder-preview .ladder-note { margin-bottom: 8px; }
-    .ladder-upload { margin-top: 7px; }
-    .ladder-upload-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
-    .ladder-confirmation { margin-top: 8px; }
-    .ladder-upload-feedback {
-      display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px; align-items: baseline;
-      font-variant-numeric: tabular-nums;
-    }
-    .ladder-upload-result { text-align: end; overflow-wrap: anywhere; }
-    .ladder-upload-result[data-result="success"] { color: var(--green); }
-    .ladder-upload-result[data-result="failure"] { color: var(--error); }
     .ladder-rows { margin: 6px 0 0; padding: 0; list-style: none; }
     .ladder-rows:empty { margin: 0; }
     .ladder-rows li {
@@ -238,11 +266,6 @@
       font-size: 14px; font-weight: 750; text-align: end; overflow-wrap: anywhere; max-width: 15ch;
     }
     .ladder-time { grid-area: time; color: var(--muted); font-size: 11px; }
-    .ladder-interval { width: 4.25rem; min-height: 34px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 10px; color: var(--ink); background: var(--surface); font: inherit; }
-    .ladder-field, .ladder-switch { display: inline-flex; align-items: center; gap: 5px; }
-    .ladder-switch { font-weight: 650; }
-    .ladder-switch input { margin: 0; accent-color: var(--blue); }
-    .ladder-interval:focus-visible, .ladder-switch input:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
     .refresh.is-busy svg { animation: spin 1s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .messages:empty { display: none; }
@@ -269,10 +292,10 @@
     .speed-value { min-width: 0; font-size: 20px; font-weight: 750; line-height: 1.15; letter-spacing: -.6px; }
     .speed-unit { font-size: 11px; font-weight: 550; line-height: 1; }
     .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 8px 0 0; padding-top: 7px; border-top: 1px solid var(--line); }
-    .metric { min-width: 0; }
-    .metric-label { margin: 0 0 3px; color: var(--muted); font-size: 11px; white-space: nowrap; }
-    .metric-label span { margin-right: 3px; font-size: 12px; }
-    .metric-value-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 1px 3px; min-width: 0; margin: 0; }
+    .metric { display: flex; flex-direction: column; min-width: 0; }
+    .metric-label { margin: 0 0 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .metric-label span[aria-hidden] { margin-inline-end: 3px; font-size: 12px; }
+    .metric-value-line { display: flex; align-items: baseline; flex-wrap: wrap; gap: 1px 3px; min-width: 0; margin: auto 0 0; }
     .metric-value { min-width: 0; max-width: 100%; font-size: 16px; line-height: 1.25; font-weight: 650; letter-spacing: -.3px; overflow-wrap: anywhere; }
     .metric-unit { color: var(--muted); font-size: 10px; }
     .output { color: var(--blue); }
@@ -297,7 +320,7 @@
     .war-value { display: block; margin-top: 2px; font-size: 20px; line-height: 1.2; font-weight: 750; letter-spacing: -.3px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
     .war-value.tokens { color: var(--blue); }
     .war-value.requests { color: var(--green); }
-    .war-value small { margin-left: 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
+    .war-value small { margin-inline-start: 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0; }
     .war-note { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
     .war-note:empty, .war-note[hidden] { display: none; }
     .war-rows { margin: 6px 0 0; padding: 0; list-style: none; }
@@ -317,7 +340,7 @@
     .rank-tps { flex-shrink: 0; padding: 3px 7px; border-radius: 10px; color: var(--speed); background: var(--speed-bg); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
     #speed .war-fill { background: var(--speed); }
     .heat { position: relative; }
-    .heat-scroll { margin: 8px -4px 0; padding: 0 4px 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
+    .heat-scroll { direction: ltr; margin: 8px -4px 0; padding: 0 4px 4px; overflow-x: auto; overflow-y: hidden; scrollbar-width: thin; }
     .heat-canvas { position: relative; }
     .heat-months { position: relative; height: 13px; color: var(--muted); font-size: 9px; }
     .heat-months span { position: absolute; top: 0; white-space: nowrap; }
@@ -365,169 +388,161 @@
 </head>
 <body>
   <main id="panel" aria-labelledby="panel-title">
-    <h1 id="panel-title">TPS Plugin</h1>
-    <div class="panel-tabs" id="panel-tabs" role="tablist" aria-label="TPS Plugin 功能">
-      <button class="panel-tab" id="tab-current" type="button" role="tab" aria-controls="current-data" aria-selected="false">当前数据</button>
-      <button class="panel-tab" id="tab-usage" type="button" role="tab" aria-controls="usage" aria-selected="false" tabindex="-1">个人统计</button>
-      <button class="panel-tab" id="tab-leaderboard" type="button" role="tab" aria-controls="leaderboard" aria-selected="false" tabindex="-1">天梯榜</button>
+    <div class="title-bar" dir="ltr">
+      <h1 id="panel-title">TPS Plugin</h1>
+      <div class="language-picker" id="language-picker" hidden>
+        <button class="language-toggle" id="language-toggle" type="button" aria-expanded="false" aria-controls="language-menu">
+          <img class="language-flag" id="language-flag" alt="">
+          <bdi class="language-name" id="language-name"></bdi>
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 6 5 5 5-5"/></svg>
+        </button>
+        <div class="language-menu" id="language-menu" hidden>
+          <input class="language-search" id="language-search" type="search" autocomplete="off" dir="auto"
+                 data-i18n-placeholder="search-languages" data-i18n-aria-label="search-languages">
+          <div class="language-options" id="language-options"></div>
+          <p class="language-message" id="language-message" role="status" data-localized-text hidden></p>
+        </div>
+      </div>
+    </div>
+    <div class="panel-tabs" id="panel-tabs" role="tablist" data-i18n-aria-label="panel-tabs">
+      <button class="panel-tab" id="tab-current" type="button" role="tab" aria-controls="current-data" aria-selected="false"><span data-i18n="current-data"></span></button>
+      <button class="panel-tab" id="tab-usage" type="button" role="tab" aria-controls="usage" aria-selected="false" tabindex="-1"><span data-i18n="personal-stats"></span></button>
+      <button class="panel-tab" id="tab-leaderboard" type="button" role="tab" aria-controls="leaderboard" aria-selected="false" tabindex="-1"><span data-i18n="leaderboard"></span></button>
     </div>
     <section class="panel-view" id="leaderboard" role="tabpanel" aria-labelledby="tab-leaderboard" tabindex="0" hidden>
       <div class="ladder-card" id="ladder-controls" hidden>
         <div id="ladder-sign-in" hidden>
           <div class="ladder-identity">
-            <p class="ladder-mine">未登录</p>
-            <button class="refresh ladder-control" id="ladder-login" type="button" aria-describedby="ladder-login-notice" disabled>用 GitHub 登录</button>
+            <p class="ladder-mine"><span data-i18n="signed-out-label"></span></p>
+            <button class="refresh ladder-control" id="ladder-login" type="button" aria-describedby="ladder-login-notice" disabled><span data-i18n="github-login"></span></button>
           </div>
-          <p class="ladder-note" id="ladder-login-notice">登录后会尝试补传近 30 天的每日用量。榜单会公开 GitHub 用户名、用量和最近上传时间。</p>
+          <p class="ladder-note" id="ladder-login-notice"><span data-i18n="github-login-notice"></span></p>
         </div>
         <div class="ladder-preview" id="ladder-login-wait" hidden>
-          <p>请在浏览器完成 GitHub 授权。授权成功后榜单会自动更新。</p>
+          <p><span data-i18n="github-authorize"></span></p>
           <div class="ladder-actions">
-            <button class="refresh ladder-secondary" id="ladder-stop-login" type="button">取消</button>
+            <button class="refresh ladder-secondary" id="ladder-stop-login" type="button"><span data-i18n="cancel"></span></button>
           </div>
         </div>
         <div id="ladder-account" hidden>
           <div class="ladder-identity">
-            <p class="ladder-mine" id="ladder-mine"></p>
-            <button class="refresh ladder-control" id="ladder-logout" type="button">退出登录</button>
+            <p class="ladder-mine" id="ladder-mine" dir="auto"></p>
+            <button class="refresh ladder-control" id="ladder-logout" type="button"><span data-i18n="sign-out"></span></button>
           </div>
-          <div class="ladder-user-grid" aria-label="个人榜单数据">
+          <div class="ladder-user-grid" data-i18n-aria-label="personal-ranking">
             <div class="ladder-badges" id="ladder-medals" hidden>
               <div class="ladder-badge-slot" id="ladder-user-badge-1"></div>
               <div class="ladder-badge-slot" id="ladder-user-badge-7"></div>
               <div class="ladder-badge-slot" id="ladder-user-badge-30"></div>
             </div>
-            <dl class="ladder-user-stat"><dt>今日排名</dt>
-              <dd class="ladder-user-rank" id="ladder-user-rank-1">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-1" title="今日榜单用量">—</dd>
+            <dl class="ladder-user-stat"><dt><span data-i18n="daily-rank"></span></dt>
+              <dd class="ladder-user-rank" id="ladder-user-rank-1" data-localized-text>—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-1" data-i18n-title="daily-ranked-usage">—</dd>
             </dl>
-            <dl class="ladder-user-stat"><dt>7 天排名</dt>
-              <dd class="ladder-user-rank" id="ladder-user-rank-7">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-7" title="7 天榜单用量">—</dd>
+            <dl class="ladder-user-stat"><dt><span data-i18n="weekly-rank"></span></dt>
+              <dd class="ladder-user-rank" id="ladder-user-rank-7" data-localized-text>—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-7" data-i18n-title="weekly-ranked-usage">—</dd>
             </dl>
-            <dl class="ladder-user-stat"><dt>30 天排名</dt>
-              <dd class="ladder-user-rank" id="ladder-user-rank-30">—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-30" title="30 天榜单用量">—</dd>
+            <dl class="ladder-user-stat"><dt><span data-i18n="monthly-rank"></span></dt>
+              <dd class="ladder-user-rank" id="ladder-user-rank-30" data-localized-text>—</dd><dd class="ladder-user-tokens" id="ladder-user-tokens-30" data-i18n-title="monthly-ranked-usage">—</dd>
             </dl>
           </div>
+          <div class="ladder-sync">
+            <p class="ladder-note" id="ladder-sync-countdown" data-localized-text hidden></p>
+            <p class="ladder-note ladder-sync-result" id="ladder-sync-result" role="status" data-localized-text hidden></p>
+          </div>
         </div>
-        <p class="ladder-status" id="ladder-status" role="status"></p>
-        <p class="ladder-note" id="ladder-logout-pending" role="status" hidden></p>
+        <p class="ladder-status" id="ladder-status" role="status" data-localized-text></p>
+        <p class="ladder-note" id="ladder-logout-pending" role="status" data-localized-text hidden></p>
       </div>
-      <section class="ladder-card" aria-labelledby="ladder-upload-title">
-        <h2 class="section-title" id="ladder-upload-title">数据上传</h2>
-        <form class="ladder-actions ladder-upload" id="ladder-upload-form">
-          <label class="ladder-switch"><input id="ladder-upload-enabled" type="checkbox" role="switch" disabled>自动上传</label>
-          <label class="ladder-field">
-            时间间隔
-            <input class="ladder-interval" id="ladder-upload-interval" type="number" min="10" step="1" value="60" aria-label="上传间隔（秒）" required disabled>
-            秒
-          </label>
-          <div class="ladder-upload-buttons">
-            <button class="refresh ladder-control" id="ladder-save-upload" type="submit" disabled>保存设置</button>
-            <button class="refresh ladder-control" id="ladder-preview" type="button" disabled>手动上传</button>
-          </div>
-        </form>
-        <div class="ladder-upload-feedback">
-          <p class="ladder-note" id="ladder-upload-note"></p>
-          <p class="ladder-note ladder-upload-result" id="ladder-upload-result" role="status" hidden></p>
-        </div>
-        <div class="ladder-preview ladder-confirmation" id="ladder-confirmation" hidden>
-          <p id="ladder-preview-text"></p>
-          <p class="ladder-note">上传会更新当天的成绩。</p>
-          <div class="ladder-actions">
-            <button class="refresh ladder-primary" id="ladder-submit" type="button">确认上传</button>
-            <button class="refresh ladder-secondary" id="ladder-cancel" type="button">取消</button>
-          </div>
-        </div>
-      </section>
       <section class="ladder-card" aria-labelledby="ladder-rank-title">
         <div class="section-head">
           <div class="ladder-title-actions">
-            <h2 class="section-title" id="ladder-rank-title">今日排名</h2>
-            <button class="refresh ladder-refresh" id="ladder-update" type="button" aria-label="刷新榜单" title="刷新榜单">
+            <h2 class="section-title" id="ladder-rank-title" data-localized-text><span data-i18n="daily-rank"></span></h2>
+            <button class="refresh ladder-refresh" id="ladder-update" type="button" data-i18n-aria-label="refresh-leaderboard" data-i18n-title="refresh-leaderboard">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
             </button>
           </div>
-          <time class="section-detail ladder-refresh-time" id="ladder-refresh-time" hidden></time>
+          <time class="section-detail ladder-refresh-time" id="ladder-refresh-time" data-localized-text hidden></time>
         </div>
-        <div class="war-tabs ladder-tabs" role="group" aria-label="榜单范围">
-          <button class="war-tab" type="button" data-rank-days="1" aria-pressed="true">今天</button>
-          <button class="war-tab" type="button" data-rank-days="7" aria-pressed="false">近 7 天</button>
-          <button class="war-tab" type="button" data-rank-days="30" aria-pressed="false">近 30 天</button>
+        <div class="war-tabs ladder-tabs" role="group" data-i18n-aria-label="ranking-period">
+          <button class="war-tab" type="button" data-rank-days="1" aria-pressed="true"><span data-i18n="today"></span></button>
+          <button class="war-tab" type="button" data-rank-days="7" aria-pressed="false"><span data-i18n="last-seven-days"></span></button>
+          <button class="war-tab" type="button" data-rank-days="30" aria-pressed="false"><span data-i18n="last-thirty-days"></span></button>
         </div>
-        <p class="ladder-note" id="ladder-freshness" role="status" hidden></p>
-        <ol class="ladder-rows" id="ladder-rows" aria-label="今日用量名次"></ol>
-        <p class="ladder-note" id="ladder-empty" hidden>今日还没有人提交。</p>
+        <p class="ladder-note" id="ladder-freshness" role="status" data-localized-text hidden></p>
+        <ol class="ladder-rows" id="ladder-rows" data-i18n-aria-label="daily-usage-rankings"></ol>
+        <p class="ladder-note" id="ladder-empty" data-localized-text hidden><span data-i18n="empty-today"></span></p>
       </section>
     </section>
     <section class="panel-view" id="usage" role="tabpanel" aria-labelledby="tab-usage" tabindex="0" data-testid="usage-group" hidden>
-      <section class="war" id="war" aria-label="用量概览">
-        <div class="war-tabs" role="tablist" aria-label="统计范围">
-          <button class="war-tab" type="button" role="tab" data-range="today" aria-selected="true" data-testid="range-today">今天</button>
-          <button class="war-tab" type="button" role="tab" data-range="week" aria-selected="false" data-testid="range-week">近 7 天</button>
-          <button class="war-tab" type="button" role="tab" data-range="month" aria-selected="false" data-testid="range-month">近 30 天</button>
+      <section class="war" id="war" data-i18n-aria-label="usage-overview">
+        <div class="war-tabs" role="tablist" data-i18n-aria-label="usage-period">
+          <button class="war-tab" type="button" role="tab" data-range="today" aria-selected="true" data-testid="range-today"><span data-i18n="today"></span></button>
+          <button class="war-tab" type="button" role="tab" data-range="week" aria-selected="false" data-testid="range-week"><span data-i18n="last-seven-days"></span></button>
+          <button class="war-tab" type="button" role="tab" data-range="month" aria-selected="false" data-testid="range-month"><span data-i18n="last-thirty-days"></span></button>
         </div>
         <div class="war-totals">
           <div class="war-stat">
-            <span class="war-label">总用量（含缓存读写）</span>
+            <span class="war-label"><span data-i18n="total-usage"></span></span>
             <strong class="war-value tokens" id="war-tokens" data-testid="war-tokens">—</strong>
           </div>
           <div class="war-stat">
-            <span class="war-label">请求数</span>
+            <span class="war-label"><span data-i18n="request-count"></span></span>
             <strong class="war-value requests" id="war-requests" data-testid="war-requests">—</strong>
           </div>
         </div>
-        <p class="war-note" id="war-note" data-testid="war-note" hidden></p>
+        <p class="war-note" id="war-note" data-testid="war-note" data-localized-text hidden></p>
       </section>
       <section class="war" aria-labelledby="war-model-title">
-        <h2 class="section-title" id="war-model-title">模型用量</h2>
-        <ol class="war-rows" id="war-rows" data-testid="war-rows" aria-label="按 agent 与模型的消耗"></ol>
-        <p class="war-empty" id="war-empty" data-testid="war-empty" hidden>这段时间还没有用量记录</p>
+        <h2 class="section-title" id="war-model-title"><span data-i18n="model-usage"></span></h2>
+        <ol class="war-rows" id="war-rows" data-testid="war-rows" data-i18n-aria-label="usage-by-agent-model"></ol>
+        <p class="war-empty" id="war-empty" data-testid="war-empty" hidden><span data-i18n="empty-usage"></span></p>
       </section>
       <section class="war" id="speed" aria-labelledby="speed-title" data-testid="speed">
         <div class="section-head">
-          <h2 class="section-title" id="speed-title">模型均速</h2>
-          <p class="section-detail">根据会话日志计算的平均输出速度</p>
+          <h2 class="section-title" id="speed-title"><span data-i18n="average-model-speed"></span></h2>
+          <p class="section-detail"><span data-i18n="model-speed-description"></span></p>
         </div>
-        <ol class="war-rows" id="speed-rows" data-testid="speed-rows" aria-label="按模型的平均输出速度，从高到低"></ol>
-        <p class="war-empty" id="speed-empty" data-testid="speed-empty" hidden>这段时间还没有样本充足的模型</p>
-        <p class="war-note" id="speed-note" data-testid="speed-note" hidden></p>
+        <ol class="war-rows" id="speed-rows" data-testid="speed-rows" data-i18n-aria-label="model-speed-list"></ol>
+        <p class="war-empty" id="speed-empty" data-testid="speed-empty" hidden><span data-i18n="empty-model-speeds"></span></p>
+        <p class="war-note" id="speed-note" data-testid="speed-note" data-localized-text hidden></p>
       </section>
       <section class="heat" id="heat" aria-labelledby="heat-title" data-testid="heatmap">
         <div class="section-head">
-          <h2 class="section-title" id="heat-title">用量热力图</h2>
-          <p class="section-detail" id="heat-sub">近一年每日用量（MB，含缓存）</p>
+          <h2 class="section-title" id="heat-title"><span data-i18n="usage-heatmap"></span></h2>
+          <p class="section-detail" id="heat-sub"><span data-i18n="heatmap-description"></span></p>
         </div>
         <div class="heat-scroll" id="heat-scroll">
           <div class="heat-canvas">
             <div class="heat-months" id="heat-months" aria-hidden="true"></div>
-            <div class="heat-grid" id="heat-grid" role="img" aria-label="近一年每日用量热力图（MB）"></div>
+            <div class="heat-grid" id="heat-grid" role="img" data-i18n-aria-label="heatmap-label"></div>
           </div>
         </div>
         <div class="heat-foot">
-          <span id="heat-total" data-testid="heat-total"></span>
-          <span class="heat-legend" aria-hidden="true">少 <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> 多</span>
+          <span id="heat-total" data-testid="heat-total" data-localized-text></span>
+          <span class="heat-legend" aria-hidden="true"><span data-i18n="heatmap-less"></span> <i class="lv0"></i><i class="lv1"></i><i class="lv2"></i><i class="lv3"></i><i class="lv4"></i> <span data-i18n="heatmap-more"></span></span>
         </div>
-        <div class="heat-tip" id="heat-tip" role="tooltip" hidden></div>
+        <div class="heat-tip" id="heat-tip" role="tooltip" data-localized-text hidden></div>
       </section>
     </section>
     <section class="panel-view" id="current-data" role="tabpanel" aria-labelledby="tab-current" tabindex="0" hidden>
       <div class="panel-header">
-        <p class="summary panel-summary" id="summary">当前频道 · 最近 0 次请求</p>
-        <button class="refresh" id="refresh" data-testid="refresh" type="button" aria-label="刷新当前数据">
+        <p class="summary panel-summary" id="summary" data-localized-text><span data-i18n="initial-recent-requests"></span></p>
+        <button class="refresh" id="refresh" data-testid="refresh" type="button" data-i18n-aria-label="refresh-current">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 17.9 17"/></svg>
-          <span>刷新</span>
+          <span><span data-i18n="refresh"></span></span>
         </button>
       </div>
-      <div class="message message-error" id="error" data-testid="error" role="alert" hidden></div>
+      <div class="message message-error" id="error" data-testid="error" role="alert" data-localized-text hidden></div>
       <div class="messages" id="warnings"></div>
-      <p class="loading" id="loading" data-testid="loading" role="status" aria-live="polite">正在读取当前对话…</p>
-      <ol class="records" id="records" aria-label="单次请求速度记录"></ol>
+      <p class="loading" id="loading" data-testid="loading" role="status" aria-live="polite" data-localized-text><span data-i18n="reading-conversation"></span></p>
+      <ol class="records" id="records" data-i18n-aria-label="per-request-speeds"></ol>
       <div class="empty" id="empty" data-testid="empty" hidden>
         <span class="empty-icon" aria-hidden="true">🚀</span>
-        <p class="empty-text" id="empty-text"></p>
+        <p class="empty-text" id="empty-text" data-localized-text></p>
       </div>
       <footer class="footer">
-        <p>单次请求速度剔除工具耗时。日志估算需输出 ≥0.2 KB 且耗时 ≥1s（≈），代理精确速度扣首字需输出 ≥0.1 KB。</p>
-        <p id="updated" hidden></p>
+        <p><span data-i18n="request-speed-note"></span></p>
+        <p id="updated" data-localized-text hidden></p>
       </footer>
     </section>
   </main>
@@ -540,12 +555,12 @@
           <div class="model-line">
             <span class="model-icon" aria-hidden="true">🤖</span>
             <h2 class="model" data-testid="model"></h2>
-            <span class="badge" data-testid="subagent-badge" hidden>子代理</span>
-            <span class="badge badge-proxy" data-testid="proxy-badge" hidden>代理</span>
+            <span class="badge" data-testid="subagent-badge" hidden><span data-i18n="subagent"></span></span>
+            <span class="badge badge-proxy" data-testid="proxy-badge" hidden><span data-i18n="proxy"></span></span>
           </div>
           <div class="meta-line">
             <time class="timestamp" data-testid="timestamp"></time>
-            <span class="ttft" data-testid="ttft" hidden></span>
+            <span class="ttft" data-testid="ttft" data-localized-text hidden></span>
           </div>
         </div>
         <div class="speed">
@@ -556,15 +571,15 @@
       </div>
       <dl class="metrics">
         <div class="metric output">
-          <dt class="metric-label"><span aria-hidden="true">📦</span>输出</dt>
+          <dt class="metric-label"><span aria-hidden="true">📦</span><span data-i18n="output"></span></dt>
           <dd class="metric-value-line"><span class="metric-value" data-testid="output-value"></span><span class="metric-unit">KB</span></dd>
         </div>
         <div class="metric duration">
-          <dt class="metric-label"><span aria-hidden="true">⏳</span>耗时</dt>
-          <dd class="metric-value-line"><span class="metric-value" data-testid="duration-value"></span><span class="metric-unit">秒</span></dd>
+          <dt class="metric-label"><span aria-hidden="true">⏳</span><span data-i18n="duration"></span></dt>
+          <dd class="metric-value-line"><span class="metric-value" data-testid="duration-value"></span><span class="metric-unit"><span data-i18n="seconds-unit"></span></span></dd>
         </div>
         <div class="metric cache">
-          <dt class="metric-label"><span aria-hidden="true">🍪</span>缓存命中</dt>
+          <dt class="metric-label"><span aria-hidden="true">🍪</span><span data-i18n="cache-hit"></span></dt>
           <dd class="metric-value-line"><span class="metric-value" data-testid="cache-value"></span></dd>
         </div>
       </dl>
@@ -572,15 +587,158 @@
   </template>
 
   <script>
-    const formatTokenMB = (() => {
-      const standard = new Intl.NumberFormat('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      const precise = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 6 });
-      return tokens => {
-        if (!Number.isFinite(tokens) || tokens < 0) return '—';
-        const format = tokens > 0 && tokens < 1_000_000 ? precise : standard;
-        return format.format(tokens / 1_000_000) + ' MB';
+    const locale = (() => {
+      const bridge = window.orca?.plugin;
+      const byId = id => document.getElementById(id);
+      const picker = byId('language-picker'), toggle = byId('language-toggle'), menu = byId('language-menu');
+      const search = byId('language-search'), list = byId('language-options'), message = byId('language-message');
+      let code = 'en', strings = {}, options = [], saving = false;
+      const formatters = new Map();
+      const t = (key, ...values) => strings[key]?.replace(/\{(\d+)\}/g, (_, index) => values[index] ?? '') ?? '';
+      const normalize = value => value.normalize('NFKD').replace(/\p{M}/gu, '').toLocaleLowerCase().trim();
+      const englishNames = new Intl.DisplayNames('en', { type: 'language' });
+      const chineseNames = new Intl.DisplayNames('zh-CN', { type: 'language' });
+
+      function messageText(key) {
+        message.hidden = !key;
+        message.textContent = key ? t(key) : '';
+      }
+
+      function renderOptions() {
+        const query = normalize(search.value);
+        const names = new Intl.DisplayNames(code, { type: 'language' });
+        const matches = options.filter(option => [
+          option.name, option.code, englishNames.of(option.code), chineseNames.of(option.code), names.of(option.code)
+        ].some(value => normalize(value).includes(query)));
+        list.replaceChildren(...matches.map(option => {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'language-option';
+          button.dataset.locale = option.code;
+          button.setAttribute('aria-pressed', String(option.code === code));
+          button.disabled = saving;
+          const flag = document.createElement('img');
+          flag.className = 'language-flag';
+          flag.src = option.flag;
+          flag.alt = '';
+          const name = document.createElement('bdi');
+          name.className = 'language-name';
+          name.lang = option.code;
+          name.textContent = option.name;
+          button.append(flag, name);
+          return button;
+        }));
+        messageText(matches.length ? '' : 'no-matching-languages');
+      }
+
+      function apply({ code: selected, strings: dictionary, options: choices }) {
+        code = selected;
+        strings = dictionary;
+        if (choices) options = choices;
+        formatters.clear();
+        document.documentElement.lang = code;
+        for (const root of [document, byId('record-template').content]) {
+          for (const element of root.querySelectorAll('[data-i18n]')) element.textContent = t(element.dataset.i18n);
+          for (const attribute of ['aria-label', 'title', 'placeholder']) {
+            for (const element of root.querySelectorAll(`[data-i18n-${attribute}]`)) {
+              element.setAttribute(attribute, t(element.getAttribute(`data-i18n-${attribute}`)));
+            }
+          }
+        }
+        const selectedOption = options.find(option => option.code === code);
+        if (selectedOption) {
+          byId('language-flag').src = selectedOption.flag;
+          const name = byId('language-name');
+          name.lang = code;
+          name.textContent = selectedOption.name;
+          toggle.setAttribute('aria-label', t('choose-language', selectedOption.name));
+          picker.hidden = false;
+        }
+        document.dispatchEvent(new Event('tps-language-changed'));
+      }
+
+      function setOpen(open, restoreFocus = false) {
+        menu.hidden = !open;
+        toggle.setAttribute('aria-expanded', String(open));
+        if (open) {
+          search.value = '';
+          renderOptions();
+          search.focus();
+        } else if (restoreFocus) toggle.focus();
+      }
+
+      async function select(selected) {
+        if (saving) return;
+        if (selected === code) return setOpen(false, true);
+        saving = true;
+        renderOptions();
+        try {
+          apply(await bridge.request('tps.locale', { code: selected }, { timeoutMs: 3000 }));
+          setOpen(false, true);
+        } catch {
+          messageText('language-save-failed');
+          search.focus();
+        } finally {
+          saving = false;
+          for (const option of list.querySelectorAll('button')) option.disabled = false;
+        }
+      }
+
+      toggle.addEventListener('click', () => setOpen(menu.hidden));
+      search.addEventListener('input', renderOptions);
+      list.addEventListener('click', event => {
+        const option = event.target.closest('button[data-locale]');
+        if (option) void select(option.dataset.locale);
+      });
+      picker.addEventListener('keydown', event => {
+        if (menu.hidden) {
+          if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setOpen(true);
+          }
+          return;
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          setOpen(false, true);
+        } else if (event.key === 'Enter' && event.target === search) {
+          const first = list.querySelector('button:not(:disabled)');
+          if (first) void select(first.dataset.locale);
+        } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          const visible = [...list.querySelectorAll('button:not(:disabled)')];
+          const index = visible.indexOf(document.activeElement);
+          const next = event.key === 'ArrowDown' ? visible[index + 1] : visible[index - 1];
+          event.preventDefault();
+          (next ?? search).focus();
+        }
+      });
+      document.addEventListener('pointerdown', event => {
+        if (!menu.hidden && !picker.contains(event.target)) setOpen(false);
+      });
+      picker.addEventListener('focusout', event => {
+        if (!saving && event.relatedTarget && !picker.contains(event.relatedTarget)) setOpen(false);
+      });
+
+      function formatted(kind, value, options) {
+        const key = JSON.stringify([kind, options]);
+        if (!formatters.has(key)) formatters.set(key, new Intl[kind](code, options));
+        return formatters.get(key).format(value);
+      }
+      return {
+        ready: bridge?.request('tps.locale', undefined, { timeoutMs: 5000 }).then(apply).catch(() => {}),
+        t,
+        number: (value, options) => formatted('NumberFormat', value, options),
+        date: (value, options) => formatted('DateTimeFormat', value, options)
       };
     })();
+    const t = locale.t;
+    const formatTokenMB = tokens => {
+      if (!Number.isFinite(tokens) || tokens < 0) return '—';
+      const options = tokens > 0 && tokens < 1_000_000
+        ? { maximumFractionDigits: 6 }
+        : { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+      return locale.number(tokens / 1_000_000, options) + ' MB';
+    };
 
     (() => {
       'use strict';
@@ -625,12 +783,13 @@
       const subscriptions = [];
       let current = null;
       let busy = false;
-      let problem = '';
+      let problem = null;
       let revision = 0;
       let disposed = false;
       let drawnRecords = '';
       let resetScroll = false;
       document.addEventListener('DOMContentLoaded', async () => {
+        await locale.ready;
         if (activeTab) return;
         const saved = typeof bridge?.request === 'function'
           ? await bridge.request('tps.panel-view', undefined, { signal: lifetime.signal, timeoutMs: 3000 }).catch(() => null)
@@ -641,49 +800,51 @@
       }, { once: true });
 
       const numeric = value => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-      const outputKBFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 3 });
-      const outputKB = tokens => numeric(tokens) ? outputKBFormat.format(tokens / 1_000) : '—';
+      const outputKB = tokens => numeric(tokens) ? locale.number(tokens / 1_000, { maximumFractionDigits: 3 }) : '—';
       const isSessionLog = record => typeof record?.dataSource === 'string' && record.dataSource.length > 0 && record.dataSource !== 'proxy';
       function number(value, fraction = 0) {
-        return numeric(value) ? value.toLocaleString('zh-CN', { minimumFractionDigits: fraction, maximumFractionDigits: fraction }) : '—';
+        return numeric(value) ? locale.number(value, { minimumFractionDigits: fraction, maximumFractionDigits: fraction }) : '—';
       }
+      const percent = (value, digits) => locale.number(value, {
+        style: 'percent', minimumFractionDigits: digits, maximumFractionDigits: digits
+      });
       function formatTps(record) {
         const tps = record?.tokensPerSecond;
         if (!numeric(tps) || tps <= 0) return '—';
-        const core = tps >= 1 ? Math.round(tps).toLocaleString('zh-CN') : tps.toFixed(1);
+        const core = number(tps, tps < 1 ? 1 : 0);
         return record?.isEstimatedSpeed ? `≈${core}` : core;
       }
       function speedTooltip(record) {
         const tps = record?.tokensPerSecond;
-        const dur = numeric(record?.durationMs) && record.durationMs > 0 ? (record.durationMs / 1000).toFixed(1) : null;
-        const ttft = numeric(record?.firstTokenMs) && record.firstTokenMs > 0 ? (record.firstTokenMs / 1000).toFixed(1) : null;
+        const dur = numeric(record?.durationMs) && record.durationMs > 0 ? number(record.durationMs / 1000, 1) : null;
+        const ttft = numeric(record?.firstTokenMs) && record.firstTokenMs > 0 ? number(record.firstTokenMs / 1000, 1) : null;
         const session = isSessionLog(record);
         if (numeric(tps) && tps > 0) {
           if (!record?.isEstimatedSpeed) {
             const genMs = numeric(record?.generationMs) ? record.generationMs : (numeric(record?.durationMs) && numeric(record?.firstTokenMs) ? record.durationMs - record.firstTokenMs : null);
-            const gen = numeric(genMs) ? (genMs / 1000).toFixed(1) : '—';
-            return `精确生成速度 ${tps.toFixed(1)} tokens/s（总耗时 ${dur ?? '—'}s · 首字 ${ttft ?? '—'}s · 纯生成 ${gen}s）`;
+            const gen = numeric(genMs) ? number(genMs / 1000, 1) : '—';
+            return t('exact-speed-detail', number(tps, 1), dur ?? '—', ttft ?? '—', gen);
           }
           return ttft
-            ? `日志估算速度 ≈${tps.toFixed(1)} tokens/s（请求耗时 ≈${dur}s · 估算首字 ≈${ttft}s）`
-            : `日志估算速度 ≈${tps.toFixed(1)} tokens/s（请求耗时 ≈${dur}s，含首字等待）`;
+            ? t('estimated-speed-first-token', number(tps, 1), dur ?? '—', ttft)
+            : t('estimated-speed-duration', number(tps, 1), dur ?? '—');
         }
         if (record?.dataSource === 'proxy') {
-          if (!numeric(record.firstTokenMs) || record.firstTokenMs <= 0) return '非流式或缺少首字时间，不计精确速度';
-          if (numeric(record.outputTokens) && record.outputTokens < 100) return `输出 ${outputKB(record.outputTokens)} KB < 0.1 KB（代理精确速度门槛）`;
-          return '纯生成耗时不足 100 毫秒，不计速度';
+          if (!numeric(record.firstTokenMs) || record.firstTokenMs <= 0) return t('missing-first-token-speed');
+          if (numeric(record.outputTokens) && record.outputTokens < 100) return t('proxy-output-threshold', outputKB(record.outputTokens));
+          return t('proxy-duration-threshold');
         }
         if (session) {
-          if (!numeric(record?.durationMs) || record.durationMs <= 0) return '缺少有效请求耗时';
+          if (!numeric(record?.durationMs) || record.durationMs <= 0) return t('missing-request-duration');
           if (record.dataSource === 'hermes_log') {
-            if (numeric(record.outputTokens) && record.outputTokens < 20) return '输出不足 20 Token，不估算 Hermes 速度';
-            if (record.durationMs < 300) return '请求耗时不足 300 毫秒，不估算 Hermes 速度';
-            return '速度未知';
+            if (numeric(record.outputTokens) && record.outputTokens < 20) return t('hermes-output-threshold');
+            if (record.durationMs < 300) return t('hermes-duration-threshold');
+            return t('unknown-speed');
           }
-          if (numeric(record.outputTokens) && record.outputTokens < 200) return `输出 ${outputKB(record.outputTokens)} KB < 0.2 KB（CC Switch 日志估算门槛）`;
-          if (record.durationMs < 1000) return `请求耗时 ${record.durationMs}ms < 1s（CC Switch 日志估算门槛）`;
+          if (numeric(record.outputTokens) && record.outputTokens < 200) return t('log-output-threshold', outputKB(record.outputTokens));
+          if (record.durationMs < 1000) return t('log-duration-threshold', number(record.durationMs));
         }
-        return '速度未知';
+        return t('unknown-speed');
       }
       function date(value) {
         if (!numeric(value) || value === 0) return null;
@@ -691,9 +852,10 @@
         return Number.isFinite(result.getTime()) ? result : null;
       }
       function timeLabel(value) {
-        return date(value)?.toLocaleString('zh-CN', {
+        const when = date(value);
+        return when ? locale.date(when, {
           month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
-        }) ?? '—';
+        }) : '—';
       }
       function setValue(element, formatted, exact) {
         element.textContent = formatted;
@@ -707,7 +869,7 @@
         const agent = agentLabel(record.provider);
         const hermes = record.provider === 'hermes';
         const model = typeof record.model === 'string' && record.model ? record.model : '';
-        const headline = model || (hermes ? '模型 —' : agent || '模型 —');
+        const headline = model || (hermes ? t('unnamed-model') : agent || t('unnamed-model'));
         find('model').textContent = headline;
         find('model').title = headline;
         const agentLine = find('agent');
@@ -719,37 +881,36 @@
         const when = date(record.completedAt);
         const timestamp = find('timestamp');
         timestamp.textContent = timeLabel(record.completedAt);
-        timestamp.title = when?.toLocaleString('zh-CN', { hour12: false }) ?? '完成时间未知';
+        timestamp.title = when ? locale.date(when, { dateStyle: 'medium', timeStyle: 'medium' }) : t('unknown-completion');
         if (when) timestamp.dateTime = when.toISOString();
 
         const session = isSessionLog(record);
         const ttftEl = find('ttft');
         if (numeric(record.firstTokenMs) && record.firstTokenMs > 0) {
-          const ttftSec = (record.firstTokenMs / 1000).toFixed(1);
+          const ttftSec = number(record.firstTokenMs / 1000, 1);
           ttftEl.hidden = false;
-          ttftEl.textContent = `· 首字 ${session ? '≈' : ''}${ttftSec}s`;
-          ttftEl.title = `${session ? '估算' : '精确'}首字时间 ${record.firstTokenMs} 毫秒（${ttftSec} 秒）`;
+          ttftEl.textContent = t('first-token-short', session ? '≈' : '', ttftSec);
+          ttftEl.title = t('first-token-detail', session ? t('estimated') : t('exact'), number(record.firstTokenMs), ttftSec);
         } else if (hermes) {
           ttftEl.hidden = false;
-          ttftEl.textContent = '· 首字 —';
-          ttftEl.title = 'Hermes 日志未记录首字延迟';
+          ttftEl.textContent = t('first-token-missing');
+          ttftEl.title = t('hermes-missing-first-token');
         }
 
         setValue(find('speed-value'), formatTps(record), speedTooltip(record));
-        setValue(find('output-value'), outputKB(record.outputTokens), numeric(record.outputTokens) ? `${outputKB(record.outputTokens)} KB` : '输出用量未知');
+        setValue(find('output-value'), outputKB(record.outputTokens), numeric(record.outputTokens) ? `${outputKB(record.outputTokens)} KB` : t('output-unknown'));
 
         const hasDuration = numeric(record.durationMs) && record.durationMs > 0;
         const seconds = hasDuration ? record.durationMs / 1000 : null;
         const durationText = hasDuration ? `${session ? '≈' : ''}${number(seconds, 1)}` : '—';
         const durationTip = hasDuration
-          ? `${session ? '估算请求耗时' : '精确请求耗时'} ${record.durationMs} 毫秒（${seconds.toFixed(2)} 秒）`
-          : '耗时未知';
+          ? t('request-duration-detail', session ? t('estimated-duration') : t('exact-duration'), number(record.durationMs), number(seconds, 2))
+          : t('duration-unknown');
         setValue(find('duration-value'), durationText, durationTip);
 
         const cacheKnown = numeric(record.cacheHitRate) && record.cacheHitRate <= 1;
-        const pct = cacheKnown ? Math.max(0, Math.min(100, record.cacheHitRate * 100)) : null;
-        const cacheText = pct !== null ? `${pct >= 99.95 ? '100' : number(pct, 1)}%` : '—';
-        setValue(find('cache-value'), cacheText, cacheKnown ? `缓存命中率 ${(record.cacheHitRate * 100).toFixed(2)}%` : '缓存命中率未知');
+        const cacheText = cacheKnown ? percent(record.cacheHitRate, record.cacheHitRate >= 0.9995 ? 0 : 1) : '—';
+        setValue(find('cache-value'), cacheText, cacheKnown ? t('cache-hit-rate', percent(record.cacheHitRate, 2)) : t('cache-hit-unknown'));
         return card;
       }
       // 用量战况: totals per window from the background index (tps.summary); counts only, never message text.
@@ -758,12 +919,10 @@
       function agentLabel(provider) {
         return AGENT_LABELS[provider || current?.activeSession?.provider] ?? '';
       }
-      let usageSummary = null, usageRange = 'today', usageProblem = '', usageTimer = null;
+      let usageSummary = null, usageRange = 'today', usageProblem = false, usageTimer = null;
       function formatCount(value) {
         if (!numeric(value)) return '—';
-        if (value >= 1e8) return `${(value / 1e8).toFixed(value >= 1e10 ? 0 : 2)}亿`;
-        if (value >= 1e4) return `${(value / 1e4).toFixed(value >= 1e6 ? 0 : 1)}万`;
-        return Math.round(value).toLocaleString('zh-CN');
+        return value >= 1e4 ? locale.number(value, { notation: 'compact', maximumFractionDigits: 2 }) : number(value);
       }
       function usageRow(row, max) {
         const item = document.createElement('li');
@@ -775,7 +934,7 @@
         agent.textContent = AGENT_LABELS[row.provider] ?? String(row.provider || 'agent').slice(0, 40);
         const model = document.createElement('span');
         model.className = 'war-model';
-        model.textContent = row.model || '未知模型';
+        model.textContent = row.model || t('unknown-model');
         model.title = model.textContent;
         const amount = document.createElement('span');
         amount.className = 'war-amount';
@@ -789,8 +948,9 @@
         track.append(fill);
         const meta = document.createElement('div');
         meta.className = 'war-meta';
-        for (const part of [`${formatCount(row.requests)} 次请求`, `新输入 ${formatTokenMB(row.freshInput)}`, `输出 ${formatTokenMB(row.output)}`, `缓存读取 ${formatTokenMB(row.cacheRead)}`]) {
+        for (const part of [t('requests-counted', formatCount(row.requests)), t('fresh-input-amount', formatTokenMB(row.freshInput)), t('output-amount', formatTokenMB(row.output)), t('cache-read-amount', formatTokenMB(row.cacheRead))]) {
           const span = document.createElement('span');
+          span.setAttribute('data-localized-text', '');
           span.textContent = part;
           meta.append(span);
         }
@@ -809,12 +969,12 @@
         byId('war-rows').replaceChildren(...list.map(row => usageRow(row, max)));
         byId('war-empty').hidden = !usageSummary || list.length > 0;
         const notes = [];
-        if (usageProblem) notes.push(usageProblem);
-        else if (!usageSummary) notes.push('正在统计…');
+        if (usageProblem) notes.push(t('usage-unavailable'));
+        else if (!usageSummary) notes.push(t('calculating-usage'));
         const progress = usageSummary?.progress;
-        if (progress && progress.done < progress.total) notes.push(`正在统计历史记录 ${progress.done}/${progress.total}，数字会逐步完善`);
-        if (range && numeric(range.cacheHitRate)) notes.push(`缓存命中率 ${(range.cacheHitRate * 100).toFixed(1)}%`);
-        if (range && numeric(range.hiddenRows) && range.hiddenRows > 0) notes.push(`另有 ${range.hiddenRows} 个模型未列出`);
+        if (progress && progress.done < progress.total) notes.push(t('usage-backfill-progress', number(progress.done), number(progress.total)));
+        if (range && numeric(range.cacheHitRate)) notes.push(t('cache-hit-rate', percent(range.cacheHitRate, 1)));
+        if (range && numeric(range.hiddenRows) && range.hiddenRows > 0) notes.push(t('model-list-truncated', number(range.hiddenRows)));
         byId('war-note').textContent = notes.join(' · ');
         byId('war-note').hidden = notes.length === 0;
         renderSpeeds(range);
@@ -822,7 +982,7 @@
       }
       // 模型均速: mean per-request TPS per model over the selected window, fastest first; ranking comes from tps.summary.
       function speedText(tps) {
-        return tps >= 1 ? Math.round(tps).toLocaleString('zh-CN') : tps.toFixed(1);
+        return number(tps, tps < 1 ? 1 : 0);
       }
       function speedRow(entry, index, max) {
         const item = document.createElement('li');
@@ -849,8 +1009,9 @@
         const meta = document.createElement('div');
         meta.className = 'war-meta';
         const agents = [...new Set((entry.providers ?? []).map(provider => AGENT_LABELS[provider] ?? String(provider).slice(0, 40)))];
-        for (const part of [`${formatCount(entry.samples)} 次请求`, ...agents]) {
+        for (const part of [t('requests-counted', formatCount(entry.samples)), ...agents]) {
           const span = document.createElement('span');
+          span.setAttribute('data-localized-text', '');
           span.textContent = part;
           meta.append(span);
         }
@@ -863,8 +1024,8 @@
         byId('speed-rows').replaceChildren(...list.map((entry, index) => speedRow(entry, index, max)));
         byId('speed-empty').hidden = !usageSummary || list.length > 0;
         const notes = [];
-        if (range && numeric(range.speedSparse) && range.speedSparse > 0) notes.push(`${range.speedSparse} 个模型请求数不足，未参与排名`);
-        if (range && numeric(range.speedHidden) && range.speedHidden > 0) notes.push(`另有 ${range.speedHidden} 个模型未列出`);
+        if (range && numeric(range.speedSparse) && range.speedSparse > 0) notes.push(t('model-speed-insufficient-samples', number(range.speedSparse)));
+        if (range && numeric(range.speedHidden) && range.speedHidden > 0) notes.push(t('model-list-truncated', number(range.speedHidden)));
         byId('speed-note').textContent = notes.join(' · ');
         byId('speed-note').hidden = notes.length === 0;
       }
@@ -872,9 +1033,9 @@
         if (!bridge || disposed || typeof bridge.request !== 'function') return;
         try {
           usageSummary = await bridge.request('tps.summary', undefined, { signal: lifetime.signal, timeoutMs: 30000 });
-          usageProblem = '';
-        } catch (error) {
-          if (!disposed) usageProblem = String(error?.message || '用量统计暂不可用').slice(0, 200);
+          usageProblem = false;
+        } catch {
+          if (!disposed) usageProblem = true;
         }
         if (!disposed) renderUsage();
       }
@@ -883,9 +1044,8 @@
       }
       // 用量热力图: one cell per local day for the last year; weeks are columns (Sunday first), five levels by quartile.
       const HEAT_DAYS = 365;
-      const WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
       const localKey = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-      const dayLabel = date => `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 周${WEEKDAYS[date.getDay()]}`;
+      const dayLabel = date => locale.date(date, { dateStyle: 'full' });
       function renderHeatmap() {
         const grid = byId('heat-grid'), months = byId('heat-months');
         const byDay = new Map((usageSummary?.daily ?? []).map(entry => [entry.day, entry]));
@@ -914,12 +1074,14 @@
             cell.dataset.tokens = String(tokens);
             cell.dataset.requests = String(numeric(entry?.requests) ? entry.requests : 0);
             cell.dataset.label = dayLabel(date);
-            cell.setAttribute('aria-label', `${cell.dataset.label}：${tokens > 0 ? formatTokenMB(tokens) : '无用量'}`);
+            cell.setAttribute('aria-label', tokens > 0
+              ? t('heatmap-day-usage', cell.dataset.label, formatTokenMB(tokens), formatCount(Number(cell.dataset.requests)))
+              : t('heatmap-day-empty', cell.dataset.label));
             cells.push(cell);
             if (weekday === 0 && !future && date.getMonth() !== lastMonth) {
               lastMonth = date.getMonth();
               const label = document.createElement('span');
-              label.textContent = `${lastMonth + 1}月`;
+              label.textContent = locale.date(date, { month: 'short' });
               label.style.left = `${week * 10}px`;
               labels.push(label);
             }
@@ -927,13 +1089,13 @@
         }
         grid.replaceChildren(...cells);
         months.replaceChildren(...labels);
-        byId('heat-total').textContent = usageSummary ? `近一年 ${formatTokenMB(total)} · ${activeDays} 天有用量` : '正在统计…';
+        byId('heat-total').textContent = usageSummary ? t('yearly-usage-total', formatTokenMB(total), number(activeDays)) : t('calculating-usage');
       }
       const heatTip = byId('heat-tip');
       function showHeatTip(cell) {
         heatTip.textContent = Number(cell.dataset.tokens) > 0
-          ? `${cell.dataset.label} · ${formatTokenMB(Number(cell.dataset.tokens))} · ${formatCount(Number(cell.dataset.requests))} 次请求`
-          : `${cell.dataset.label} · 无用量记录`;
+          ? t('heatmap-day-usage', cell.dataset.label, formatTokenMB(Number(cell.dataset.tokens)), formatCount(Number(cell.dataset.requests)))
+          : t('heatmap-day-empty', cell.dataset.label);
         heatTip.hidden = false;
         const host = byId('heat').getBoundingClientRect(), rect = cell.getBoundingClientRect();
         const half = heatTip.offsetWidth / 2;
@@ -960,19 +1122,20 @@
         const working = busy || Boolean(current?.loading);
         ui['current-data'].setAttribute('aria-busy', String(working));
         const scopeLabel = current?.activeSession?.provider === 'channel'
-          ? (current.activeSession.title || '当前频道')
-          : '当前对话';
-        ui.summary.textContent = `${scopeLabel} · 最近 ${records.length} 次请求`;
+          ? (current.activeSession.title || t('current-channel'))
+          : t('current-conversation');
+        ui.summary.textContent = t('recent-requests', scopeLabel, number(records.length));
         ui.refresh.disabled = working || !bridge;
         ui.refresh.classList.toggle('is-busy', working);
         ui.error.hidden = !problem;
-        ui.error.textContent = problem ? `读取失败：${problem}` : '';
+        ui.error.textContent = problem ? t(problem) : '';
         ui.loading.hidden = !working;
-        ui.loading.textContent = current ? '正在更新统计…' : '正在读取当前对话…';
+        ui.loading.textContent = current ? t('updating-stats') : t('reading-conversation');
         const warnings = document.createDocumentFragment();
         for (const text of (current?.warnings ?? []).slice(0, 6)) {
           const warning = document.createElement('div');
           warning.className = 'message message-warning';
+          warning.setAttribute('data-localized-text', '');
           warning.textContent = String(text).slice(0, 1000);
           warnings.append(warning);
         }
@@ -986,9 +1149,9 @@
         }
         ui.records.hidden = records.length === 0;
         ui.empty.hidden = records.length > 0 || working || Boolean(problem);
-        ui['empty-text'].textContent = String(current?.emptyMessage || '当前频道还没有可统计的请求记录').slice(0, 1000);
+        ui['empty-text'].textContent = String(current?.emptyMessage || t('empty-current-records')).slice(0, 1000);
         ui.updated.hidden = !date(current?.updatedAt);
-        ui.updated.textContent = `更新于 ${timeLabel(current?.updatedAt)}`;
+        ui.updated.textContent = t('updated-at', timeLabel(current?.updatedAt));
         if (resetScroll) {
           resetScroll = false;
           if (!ui['current-data'].hidden) window.scrollTo(0, 0);
@@ -1003,20 +1166,20 @@
         } else if (next.generation < (current?.generation ?? -1)) return false;
         if (current && (next.instanceId !== current.instanceId || next.generation !== current.generation)) resetScroll = true;
         current = next;
-        problem = '';
+        problem = null;
         return true;
       }
       async function request(name) {
         if (busy || disposed || !bridge) return;
         const pendingRevision = revision;
         busy = true;
-        problem = '';
+        problem = null;
         render();
         try {
           const next = await bridge.request(name, undefined, { signal: lifetime.signal, timeoutMs: 30000 });
           if (!disposed && pendingRevision === revision) accept(next, 'request');
-        } catch (error) {
-          if (!disposed && pendingRevision === revision) problem = String(error?.message || '请稍后重试。').slice(0, 1000);
+        } catch {
+          if (!disposed && pendingRevision === revision) problem = 'current-read-failed';
         } finally {
           if (!disposed) { busy = false; render(); }
         }
@@ -1031,6 +1194,12 @@
         clearInterval(usageTimer);
       }
       ui.refresh.addEventListener('click', refresh);
+      document.addEventListener('tps-language-changed', () => {
+        drawnRecords = '';
+        heatTip.hidden = true;
+        render();
+        renderUsage();
+      }, { signal: lifetime.signal });
       window.addEventListener('pagehide', cleanup, { once: true });
       if (bridge && typeof bridge.request === 'function' && typeof bridge.on === 'function') {
         subscriptions.push(bridge.on('tps.changed', next => {
@@ -1047,7 +1216,7 @@
         void loadUsage();
         usageTimer = setInterval(() => void loadUsage(), USAGE_REFRESH_MS);
       } else {
-        problem = '请在 Orca 的「对话 TPS」面板中打开。';
+        problem = 'open-in-orca';
         render();
       }
     })();
@@ -1058,43 +1227,44 @@
       const element = id => document.getElementById('ladder-' + id);
       const group = document.getElementById('leaderboard');
       const lifetime = new AbortController();
-      const clock = new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      const shortClock = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
+      const clock = time => locale.date(time, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const shortClock = time => locale.date(time, { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
       const boardDay = () => new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
       const rankTabs = [...group.querySelectorAll('[data-rank-days]')];
       const periods = [
-        { days: 1, mark: 'Ⅰ', title: '今日' }, { days: 7, mark: '7', title: '7 天' },
-        { days: 30, mark: '30', title: '30 天' }
+        { days: 1, mark: 'Ⅰ', title: 'today-period' }, { days: 7, mark: '7', title: 'seven-day-period' },
+        { days: 30, mark: '30', title: 'thirty-day-period' }
       ];
-      const podium = ['冠军', '亚军', '季军'];
+      const podium = ['gold-medal', 'silver-medal', 'bronze-medal'];
       const messages = {
-        unavailable: '连不上榜单服务器，请稍后重试。', github_unavailable: '榜单暂时无法完成 GitHub 登录。',
-        login_required: '用 GitHub 登录后即可提交。', banned: '这个 GitHub 账号已被封禁，无法提交。',
-        installation_unavailable: '无法保存本机插件编号，请稍后重试。', upgrade_required: '请更新 TPS 插件后再上传。',
-        session_expired: '登录已失效，请重新登录。',
-        login_expired: '登录请求已过期，请重新登录。', login_denied: 'GitHub 授权已取消。',
-        browser_unavailable: '没有打开浏览器，请重新点击登录。', signed_in: '已登录。', signed_out: '已退出登录。',
-        accepted: '已上传，成绩已更新。', duplicate: '这次上传已经处理。',
-        removed: '今日成绩已由管理员移除。', too_soon: '上次上传后满 10 秒即可更新。',
-        upload_in_progress: '正在上传，请稍候。',
-        locked: '今天的提交权限已锁定，北京时间明天零点恢复。',
-        history_pending: '正在准备首次上传的历史用量…', history_invalid: '历史用量未能上传，请检查个人统计。',
-        new_day: '榜单日期已更新，请重新预览。', usage_changed: '用量已变化，请重新预览。',
-        usage_unready: '当日用量还未准备好，请稍后再试。', invalid: '提交数据不合规，请刷新再试。',
-        rate_limited: '请求太频繁，请稍后再试。', invalid_interval: '上传间隔至少为 10 秒。'
+        unavailable: 'leaderboard-unavailable', github_unavailable: 'github-login-unavailable',
+        login_required: 'login-required', banned: 'account-banned',
+        installation_unavailable: 'installation-save-failed', upgrade_required: 'update-required',
+        session_expired: 'session-expired',
+        login_expired: 'login-expired', login_denied: 'github-login-denied',
+        browser_unavailable: 'browser-unavailable', signed_in: 'signed-in-success', signed_out: 'signed-out-success',
+        accepted: 'upload-accepted', duplicate: 'upload-duplicate',
+        removed: 'score-removed', too_soon: 'upload-too-soon',
+        upload_in_progress: 'upload-in-progress',
+        locked: 'upload-locked',
+        history_pending: 'preparing-upload-history', history_invalid: 'history-upload-invalid',
+        new_day: 'new-ranking-day', usage_changed: 'usage-changed',
+        usage_unready: 'usage-not-ready', invalid: 'upload-invalid',
+        rate_limited: 'rate-limited'
       };
-      let model, session, local, preview, pendingLogin, retryLogin, rankDays = 1;
+      const messageFor = code => Object.hasOwn(messages, code) ? t(messages[code]) : undefined;
+      let model, session, pendingLogin, retryLogin, rankDays = 1;
       const cachedRankings = new Map(), refreshing = new Set();
-      let busy = false, savingUpload = false, readingUsage = false, restoringSession = false, edited = false;
+      let busy = false, restoringSession = false;
       let revision = 0, drawnRows = '', renderedDay = '', loginProblem = '', messageCode = '';
       let summaryAccount = '', summaryUpload = null;
 
       async function request(action, payload = {}) {
         try {
-          return await bridge.request('tps.leaderboard', { action, days: rankDays, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
-        } catch {
-          return { code: 'unavailable' };
-        }
+          const result = await bridge.request('tps.leaderboard', { action, days: rankDays, ...payload }, { signal: lifetime.signal, timeoutMs: 30000 });
+          if (result && typeof result === 'object') return result;
+        } catch {}
+        return { code: 'unavailable' };
       }
 
       function medal(rank, period) {
@@ -1103,7 +1273,7 @@
         const badge = document.createElement('span');
         badge.className = 'ladder-medal ladder-medal-' + period.days;
         badge.dataset.place = rank;
-        badge.title = period.title + place;
+        badge.title = t('medal-position', t(period.title), t(place));
         badge.setAttribute('role', 'img');
         badge.setAttribute('aria-label', badge.title);
         const crown = document.createElement('span'), branch = document.createElement('span');
@@ -1140,14 +1310,17 @@
           user.className = 'ladder-row-user';
           total.className = 'ladder-total';
           time.className = 'ladder-time';
-          rank.textContent = row.rank;
+          rank.textContent = locale.number(row.rank);
           name.textContent = row.username;
+          name.dir = 'auto';
           name.title = row.username;
           user.append(name);
           const badge = medal(row.rank, period);
           if (badge) user.append(badge);
           total.textContent = formatTokenMB(row.tokens);
-          time.textContent = (rankDays === 1 ? '' : '最近上传 ') + clock.format(row.submittedAt);
+          const uploaded = clock(row.submittedAt);
+          if (rankDays !== 1) time.setAttribute('data-localized-text', '');
+          time.textContent = rankDays === 1 ? uploaded : t('last-upload-at', uploaded);
           time.dateTime = new Date(row.submittedAt).toISOString();
           item.append(rank, user, total, time);
           list.append(item);
@@ -1157,7 +1330,7 @@
 
       function renderAccount(username, account) {
         const identity = element('mine');
-        identity.textContent = username || '已登录';
+        identity.textContent = username || t('signed-in-label');
         identity.title = username ?? '';
         let hasMedals = false;
         for (const period of periods) {
@@ -1166,7 +1339,7 @@
           const freshToday = period.days === 1 && account.day === renderedDay && account.submitted &&
             (!row || account.submittedAt >= row.submittedAt);
           const tokens = freshToday ? account.tokens : row?.tokens;
-          element('user-rank-' + period.days).textContent = row ? '第 ' + row.rank + ' 名' : '—';
+          element('user-rank-' + period.days).textContent = row ? t('rank-position', locale.number(row.rank)) : '—';
           element('user-tokens-' + period.days).textContent = formatTokenMB(tokens);
           const place = row?.rank >= 1 && row.rank <= podium.length ? row.rank : 0;
           if (place) hasMedals = true;
@@ -1179,32 +1352,36 @@
         element('medals').hidden = !hasMedals;
       }
 
-      function renderUpload(snapshot, signedIn, time) {
-        const enabled = snapshot.upload?.enabled === true;
-        const next = Math.ceil(((snapshot.nextAutomaticAt ?? 0) - time) / 1000);
-        const countdown = element('upload-note');
-        let text = '自动上传已关闭。';
-        if (!signedIn) text = '登录后可上传今日用量。';
-        else if (snapshot.uploading || messageCode === 'upload_in_progress') text = '正在上传…';
-        else if (enabled) {
-          if (next > 0) {
-            const hours = Math.floor(next / 3600), minutes = Math.floor(next / 60) % 60, seconds = next % 60;
-            const span = [minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
-            text = '自动上传倒计时 ' + (hours ? hours + ':' : '') + span;
-          } else text = '等待自动上传…';
+      function renderSyncCountdown(snapshot, signedIn, time) {
+        const note = element('sync-countdown');
+        let text = '';
+        if (signedIn && !snapshot?.board?.banned) {
+          if (snapshot.uploading) text = t('sync-in-progress');
+          else if (Number.isFinite(snapshot.nextAutomaticAt)) {
+            const seconds = Math.ceil((snapshot.nextAutomaticAt - time) / 1000);
+            if (seconds > 0) {
+              const hours = Math.floor(seconds / 3600);
+              const timer = [Math.floor(seconds / 60) % 60, seconds % 60]
+                .map(value => locale.number(value, { minimumIntegerDigits: 2 })).join(':');
+              text = t('next-sync-countdown', hours ? locale.number(hours) + ':' + timer : timer);
+            } else text = t('sync-waiting');
+          }
         }
-        if (countdown.textContent !== text) countdown.textContent = text;
-        const log = element('upload-result'), record = signedIn ? snapshot.lastUpload : null;
-        const success = ['accepted', 'initialized', 'duplicate'].includes(record?.code);
-        log.hidden = !record;
-        log.dataset.result = success ? 'success' : 'failure';
-        const name = { automatic: '自动上传', manual: '手动上传', history: '历史补传' }[record?.kind] ?? '上传';
-        const detail = record?.code === 'initialized' ? '已完成' : success ? '成功' : '失败 · ' + (messages[record?.code] ?? '请重试。');
-        const fullOutcome = record ? clock.format(record.at) + ' · ' + name + detail : '';
-        const outcome = success ? name + detail + ' ' + shortClock.format(record.at) : fullOutcome;
-        if (log.textContent !== outcome) log.textContent = outcome;
-        const tooltip = success ? fullOutcome : '';
-        if (log.title !== tooltip) log.title = tooltip;
+        note.hidden = !text;
+        if (note.textContent !== text) note.textContent = text;
+      }
+
+      function renderSyncResult(record) {
+        const note = element('sync-result');
+        note.hidden = !Number.isFinite(record?.at);
+        if (note.hidden) return;
+        const succeeded = ['accepted', 'initialized', 'duplicate'].includes(record.code);
+        const at = shortClock(record.at);
+        const text = succeeded ? t('last-sync-time', at)
+          : t('last-sync-failed', at, messageFor(record.code) ?? t('sync-failure-unknown'));
+        note.dataset.result = succeeded ? 'success' : 'failed';
+        note.title = clock(record.at);
+        if (note.textContent !== text) note.textContent = text;
       }
 
       function render(code = messageCode) {
@@ -1213,7 +1390,7 @@
         const time = Date.now();
         const { board = {} } = model ?? {};
         const snapshot = session ?? model ?? {};
-        const { board: account = board, upload, sessionProblem, initializing, historyProblem } = snapshot;
+        const { board: account = board, sessionProblem, initializing, historyProblem } = snapshot;
         const selected = model?.days === rankDays;
         const readyBoard = board.day === renderedDay && Array.isArray(board.rows);
         const live = selected && readyBoard;
@@ -1221,7 +1398,7 @@
         const cachedRanking = cached?.day === renderedDay ? cached : null;
         const ranking = live ? board : cachedRanking;
         const freshness = element('freshness');
-        const notice = !ranking && !(selected && board.code) ? '正在加载榜单…' : '';
+        const notice = !ranking && !(selected && board.code) ? t('loading-leaderboard') : '';
         if (freshness.textContent !== notice) freshness.textContent = notice;
         freshness.hidden = !notice;
         const refreshedAt = (live ? model.updatedAt : null) ?? cachedRanking?.updatedAt ?? null;
@@ -1229,8 +1406,8 @@
         refreshTime.hidden = refreshedAt === null;
         if (refreshedAt !== null) {
           refreshTime.dateTime = new Date(refreshedAt).toISOString();
-          refreshTime.title = clock.format(refreshedAt);
-          refreshTime.textContent = '刷新于 ' + shortClock.format(refreshedAt);
+          refreshTime.title = clock(refreshedAt);
+          refreshTime.textContent = t('leaderboard-refreshed-at', shortClock(refreshedAt));
         }
         const signedIn = snapshot.signedIn ?? account.authenticated;
         const checkingLogin = typeof signedIn !== 'boolean';
@@ -1239,41 +1416,29 @@
         element('login').disabled = busy;
         element('login-wait').hidden = !pendingLogin;
         element('account').hidden = !signedIn;
+        element('logout').disabled = busy;
         const logoutNote = element('logout-pending');
-        const logoutText = snapshot.logoutStorageFailed ? '暂时无法保存退出请求，请保持 Orca 打开，并在联网后完成退出。'
-          : snapshot.logoutPending ? '上次退出正在等待服务器确认，联网后会自动重试。' : '';
+        const logoutText = snapshot.logoutStorageFailed ? t('logout-storage-failed')
+          : snapshot.logoutPending ? t('logout-pending') : '';
         if (logoutNote.textContent !== logoutText) logoutNote.textContent = logoutText;
         logoutNote.hidden = !logoutText;
-        const boardProblem = selected ? messages[board.code] : undefined;
-        const sessionStatus = checkingLogin ? '正在确认登录状态…' : '';
-        const locked = account.lockedUntil > time, coolingDown = account.nextUploadAt > time;
-        const authProblem = pendingLogin ? undefined : messages[sessionProblem];
-        const actionMessage = code === 'upload_in_progress' || code === snapshot.lastUpload?.code ? undefined : messages[code];
-        element('status').textContent = authProblem ?? actionMessage ?? messages[loginProblem] ??
-          (account.banned ? messages.banned : boardProblem) ??
-          (locked ? messages.locked : messages[historyProblem] ?? (initializing ? messages.history_pending : sessionStatus));
-        element('rank-title').textContent = rankDays === 1 ? '今日排名' : '累计排名';
-        element('empty').textContent = rankDays === 1 ? '今日还没有人提交。' : '这段时间还没有成绩。';
+        const boardProblem = selected ? messageFor(board.code) : undefined;
+        const sessionStatus = checkingLogin ? t('checking-login') : '';
+        const locked = account.lockedUntil > time;
+        const authProblem = pendingLogin ? undefined : messageFor(sessionProblem);
+        const actionMessage = messageFor(code);
+        element('status').textContent = authProblem ?? actionMessage ?? messageFor(loginProblem) ??
+          (account.banned ? messageFor('banned') : boardProblem) ??
+          (locked ? messageFor('locked') : messageFor(historyProblem) ?? (initializing ? messageFor('history_pending') : sessionStatus));
+        element('rank-title').textContent = rankDays === 1 ? t('daily-rank') : t('period-rankings');
+        element('rows').setAttribute('aria-label', t(rankDays === 1 ? 'daily-usage-rankings' : 'period-rankings'));
+        element('empty').textContent = rankDays === 1 ? t('empty-today') : t('empty-rankings');
         element('empty').hidden = !ranking || ranking.rows.length > 0;
         const username = signedIn ? account.username : '';
         renderRows(ranking?.rows ?? [], username);
         if (signedIn) renderAccount(username, account);
-        else preview = undefined;
-        const usageReady = local?.ready && local.day === renderedDay;
-        const removed = account.day === renderedDay && account.submitted && account.tokens === null;
-        const canSubmit = signedIn && usageReady && local.tokens > 0 && !locked && !removed;
-        element('preview').hidden = Boolean(preview);
-        element('preview').disabled = !canSubmit || coolingDown || busy || snapshot.uploading;
-        element('confirmation').hidden = !canSubmit || !preview;
-        element('submit').disabled = coolingDown || busy || snapshot.uploading;
-        if (coolingDown && canSubmit && !code && !upload?.enabled) element('status').textContent = messages.too_soon;
-        const enabled = upload?.enabled === true;
-        element('upload-enabled').checked = enabled;
-        element('upload-enabled').disabled = !signedIn || savingUpload;
-        element('upload-interval').disabled = !signedIn || savingUpload;
-        element('save-upload').disabled = !signedIn || savingUpload;
-        if (!edited) element('upload-interval').value = upload?.interval ?? 60;
-        renderUpload(snapshot, signedIn, time);
+        renderSyncCountdown(snapshot, signedIn, time);
+        renderSyncResult(signedIn ? snapshot.lastUpload : null);
       }
 
       async function showCache(days = rankDays) {
@@ -1287,7 +1452,7 @@
       }
 
       async function refreshSession() {
-        if (restoringSession || busy || savingUpload || lifetime.signal.aborted) return;
+        if (restoringSession || busy || lifetime.signal.aborted) return;
         restoringSession = true;
         const requestedAt = revision;
         try {
@@ -1295,20 +1460,7 @@
           if (lifetime.signal.aborted || revision !== requestedAt || typeof result.signedIn !== 'boolean') return;
           session = result;
           render();
-          void refreshUsage();
         } finally { restoringSession = false; }
-      }
-
-      async function refreshUsage() {
-        if (readingUsage || !(session ?? model)?.signedIn || lifetime.signal.aborted) return;
-        readingUsage = true;
-        try {
-          const result = await request('usage');
-          if (lifetime.signal.aborted || !result.local) return;
-          local = result.local;
-          if (preview && (local.day !== preview.day || local.tokens !== preview.tokens)) preview = undefined;
-          if (!group.hidden) render();
-        } finally { readingUsage = false; }
       }
 
       function cacheRanking(result, days) {
@@ -1320,13 +1472,11 @@
       }
 
       function showState(result, days = rankDays) {
-        const wasSignedIn = (session ?? model)?.signedIn;
         model = result.board ? result : { ...model, days, board: { code: result.code } };
         if (typeof result.signedIn === 'boolean') session = result;
         cacheRanking(result, days);
         render(result.code ?? '');
         showSummaries();
-        if (!wasSignedIn) void refreshUsage();
       }
 
       function showSummaries() {
@@ -1351,7 +1501,7 @@
       async function refresh(days = rankDays) {
         if (group.hidden || lifetime.signal.aborted) return;
         if (renderedDay !== boardDay()) render('');
-        if (busy || savingUpload || refreshing.has(days)) return;
+        if (busy || refreshing.has(days)) return;
         const requestedAt = revision;
         refreshing.add(days);
         try {
@@ -1368,37 +1518,23 @@
         void showCache();
       }
 
-      async function update(action, details) {
+      async function logout() {
         if (busy) return;
         busy = true;
         const requestedAt = ++revision;
-        if (action === 'logout') {
-          edited = false;
-          preview = undefined;
-          pendingLogin = undefined;
-          loginProblem = '';
-          clearTimeout(retryLogin);
-        }
-        if (action === 'submit') render('upload_in_progress');
+        pendingLogin = undefined;
+        loginProblem = '';
+        clearTimeout(retryLogin);
+        let result;
         try {
-          const result = await request(action, details);
-          busy = false;
-          if (result.board && (revision === requestedAt || result.code === 'signed_out')) showState(result);
-          else render(result.code);
-          if (result.code === 'signed_out') void refresh();
+          render('');
+          result = await request('logout');
         } finally { busy = false; }
-      }
-
-      async function updateUpload(enabled, interval) {
-        if (savingUpload) return;
-        savingUpload = true;
-        revision++;
-        try {
-          const result = await request('upload', { enabled, interval });
-          if (typeof result.signedIn === 'boolean') session = result;
-          savingUpload = false;
-          render(result.code);
-        } finally { savingUpload = false; }
+        if (lifetime.signal.aborted) return;
+        if (revision !== requestedAt) { render(); return; }
+        if (result.board) showState(result);
+        else render(result.code);
+        if (result.code === 'signed_out') void refresh();
       }
 
       async function poll() {
@@ -1431,6 +1567,11 @@
         showCachedRanking();
       });
       group.addEventListener('tps-view-opened', showCachedRanking);
+      document.addEventListener('tps-language-changed', () => {
+        drawnRows = '';
+        for (const { days } of periods) delete element('user-badge-' + days).dataset.place;
+        render();
+      }, { signal: lifetime.signal });
       element('update').addEventListener('click', async () => {
         const button = element('update');
         button.classList.add('is-busy');
@@ -1482,41 +1623,13 @@
         render('');
         if (attempt) await request('cancel', { loginUrl: attempt.loginUrl });
       });
-      element('logout').addEventListener('click', () => void update('logout'));
-      element('preview').addEventListener('click', () => {
-        if (!local?.ready || local.day !== boardDay()) return;
-        preview = local;
-        element('preview-text').textContent = '上传 ' + preview.day + ' 的 ' + formatTokenMB(preview.tokens) + '？';
-        render('');
-      });
-      element('cancel').addEventListener('click', () => { preview = undefined; render(''); });
-      element('submit').addEventListener('click', () => {
-        if (busy || !preview) return;
-        const { day, tokens } = preview;
-        preview = undefined;
-        void update('submit', { day, tokens });
-      });
-      const uploadInterval = element('upload-interval');
-      const uploadEnabled = element('upload-enabled');
-      uploadInterval.addEventListener('input', () => { edited = true; });
-      uploadEnabled.addEventListener('change', () => {
-        if (uploadEnabled.checked && !uploadInterval.reportValidity()) {
-          uploadEnabled.checked = false;
-          return;
-        }
-        const seconds = uploadInterval.validity.valid ? uploadInterval.valueAsNumber : model?.upload?.interval ?? 60;
-        edited = false;
-        void updateUpload(uploadEnabled.checked, seconds);
-      });
-      element('upload-form').addEventListener('submit', event => {
-        event.preventDefault();
-        edited = false;
-        void updateUpload(uploadEnabled.checked, uploadInterval.valueAsNumber);
-      });
+      element('logout').addEventListener('click', () => void logout());
       void refreshSession();
       for (const { days } of periods) void showCache(days);
       const interval = setInterval(() => {
         if (group.hidden) return;
+        const snapshot = session ?? model;
+        renderSyncCountdown(snapshot, snapshot?.signedIn ?? snapshot?.board?.authenticated, Date.now());
         void refresh();
         void refreshSession();
       }, 1000);

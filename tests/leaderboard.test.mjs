@@ -410,11 +410,12 @@ test('reopening the database keeps the score and the daily lock', async t => {
   } finally { reopened.close(); }
 });
 
-test('the plugin keeps its signed-in upload settings and stops uploading when switched off', async t => {
+test('login starts ten-second sync, restored login resumes it, and logout stops it', async t => {
   const api = await fixture(t);
   const storage = new Map(), secrets = new Map(), handlers = new Map();
   const requests = [];
   const installationIds = [];
+  storage.set('leaderboard:upload', { enabled: false, interval: 60 });
   const orca = {
     storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
     host: { has: () => true, call: async (method, { key, value }) => {
@@ -442,8 +443,7 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   const installationId = storage.get('leaderboard:installation-id');
   assert.match(installationId, /^[\da-f-]{36}$/);
   assert.equal(initial.board.authenticated, false);
-  assert.deepEqual(initial.upload, { enabled: false, interval: 60 });
-  assert.equal((await run('upload', { enabled: true, interval: 10 })).code, 'login_required');
+  assert.equal(initial.nextAutomaticAt, null);
   assert.equal((await run('submit', { day: TODAY, tokens })).code, 'login_required');
   assert.deepEqual(JSON.parse(JSON.stringify(initial)), initial);
   const login = await run('login');
@@ -453,30 +453,33 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.equal(signedIn.code, 'signed_in');
   assert.equal(signedIn.board.username, 'alice');
   assert.equal(signedIn.token, undefined);
+  assert.equal(signedIn.nextAutomaticAt, api.clock() + 10_000);
   stop();
   stop = launch();
   const beforeRestore = requests.length;
   const restored = await run('session');
   assert.equal(restored.board.username, 'alice');
   assert.equal(restored.signedIn, true);
+  assert.equal(restored.nextAutomaticAt, api.clock() + 10_000);
   assert.equal(requests.length, beforeRestore);
   assert.equal((await run('state')).board.username, 'alice');
   assert.deepEqual(requests.at(-1), { path: '/api/today', method: 'GET', authenticated: false });
   tokens = 700;
   assert.equal((await run('submit', { day: TODAY, tokens: 600 })).code, 'usage_changed');
   const beforeUpload = requests.length;
-  const submitted = await run('submit', { day: TODAY, tokens: 700 });
+  const submitted = await run('submit');
   assert.equal(submitted.code, 'accepted');
   assert.equal(submitted.board.tokens, 700);
   assert.deepEqual(requests.slice(beforeUpload), [{ path: '/api/today/submit', method: 'POST', authenticated: true }]);
   assert.equal((await run('state')).board.rows[0].mine, true);
   const viewerToken = savedToken(secrets);
   assert.equal((await run('submit', { day: TODAY, tokens: 700 })).code, 'too_soon');
-  assert.equal((await run('upload', { enabled: true, interval: 9 })).code, 'invalid_interval');
-  api.advance(10_000);
   tokens = 800;
-  assert.deepEqual((await run('upload', { enabled: true, interval: 10 })).upload, { enabled: true, interval: 10 });
-  for (let tries = 0; tries < 25 && (await run('session')).lastUpload?.kind !== 'automatic'; tries++) await delay(10);
+  api.advance(9999);
+  await delay(1100);
+  assert.deepEqual(installationIds, [installationId]);
+  api.advance(1);
+  for (let tries = 0; tries < 40 && (await run('session')).lastUpload?.kind !== 'automatic'; tries++) await delay(50);
   const automatic = await run('session');
   assert.equal(automatic.board.tokens, 800);
   assert.deepEqual(automatic.lastUpload, { kind: 'automatic', code: 'accepted', at: api.clock() });
@@ -490,22 +493,24 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.deepEqual(installationIds, [installationId, installationId, installationId]);
   stop();
   stop = launch();
-  assert.deepEqual((await run('state')).upload, { enabled: true, interval: 10 });
-  const off = await run('upload', { enabled: false, interval: 10 });
-  assert.deepEqual(off.upload, { enabled: false, interval: 10 });
-  assert.equal(off.nextAutomaticAt, null);
+  const out = await run('logout');
+  assert.equal(out.board.authenticated, false);
+  assert.equal(out.nextAutomaticAt, null);
   api.advance(20_000);
   tokens = 900;
   await delay(1100);
-  assert.equal((await run('state')).board.tokens, 850);
-  assert.equal((await run('logout')).board.authenticated, false);
+  stop();
+  stop = launch();
+  assert.equal((await run('session')).nextAutomaticAt, null);
+  assert.deepEqual(installationIds, [installationId, installationId, installationId]);
   assert.ok(!savedToken(secrets));
   for (let attempt = 0; attempt < 25 && (await api.get(viewerToken, '/api/today/status')).status !== 401; attempt++) await delay(20);
   assert.equal((await api.get(viewerToken, '/api/today/status')).status, 401);
 
   await api.authorizePlugin((await run('login')).loginUrl, 'bob');
-  assert.equal((await run('poll')).board.username, 'bob');
-  assert.equal((await run('state')).upload.enabled, false);
+  const bobLogin = await run('poll');
+  assert.equal(bobLogin.board.username, 'bob');
+  assert.equal(bobLogin.nextAutomaticAt, api.clock() + 10_000);
   const bob = savedToken(secrets);
   const admin = await api.websiteLogin('admin');
   await api.form('/admin/ban', admin.cookie, { account: '2', ban: '1', reason: 'test' });
@@ -513,6 +518,7 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.equal(blocked.code, 'banned');
   assert.equal(blocked.signedIn, true);
   assert.equal(blocked.board.banned, true);
+  assert.equal(blocked.nextAutomaticAt, null);
   assert.equal(savedToken(secrets), bob);
   await api.call('/api/auth/logout', { method: 'POST', headers: { Authorization: 'Bearer ' + bob } });
   assert.equal((await run('state')).signedIn, true);
@@ -520,8 +526,58 @@ test('the plugin keeps its signed-in upload settings and stops uploading when sw
   assert.equal(expired.code, 'login_required');
   assert.equal(expired.sessionProblem, 'session_expired');
   assert.equal(expired.signedIn, false);
+  assert.equal(expired.nextAutomaticAt, null);
   assert.equal(secrets.size, 0);
   assert.equal((await run('cache')).ranking.rows.length, 1);
+});
+
+test('logout prevents retrying or recording an earlier automatic submission', async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  let time = START, handler;
+  const storage = new Map();
+  const automaticStarted = Promise.withResolvers(), automaticResponse = Promise.withResolvers();
+  const requests = [];
+  const stop = startLeaderboard({
+    grantedCapabilities: ['secrets:own'],
+    host: { has: () => true, call: async () => ({ value: 'a'.repeat(43) }) },
+    storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
+    panels: { handle: (_, fn) => { handler = fn; return { dispose() {} }; } }
+  }, {
+    endpoint: ORIGIN,
+    now: () => new Date(time),
+    readUsage: async () => ({ ready: true, day: TODAY, tokens: 1234 }),
+    fetcher: async (url, options) => {
+      if (url.pathname === '/api/auth/logout') return Response.json({ ok: true });
+      requests.push({ path: url.pathname, body: JSON.parse(options.body) });
+      if (requests.length === 1) return Response.json({ code: 'unavailable' }, { status: 503 });
+      automaticStarted.resolve();
+      return automaticResponse.promise;
+    }
+  });
+  t.after(stop);
+  const manual = await handler({ action: 'submit' });
+  assert.equal(manual.code, 'unavailable');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].path, '/api/today/submit');
+  assert.equal(requests[0].body.tokens, 1234);
+  time += 10_000;
+  t.mock.timers.tick(1000);
+  await automaticStarted.promise;
+  const cancelled = await handler({ action: 'logout' });
+  assert.equal(cancelled.signedIn, false);
+  assert.equal(cancelled.nextAutomaticAt, null);
+  assert.equal(cancelled.uploadingKind, 'automatic');
+  assert.equal(requests.length, 2);
+  automaticResponse.resolve(Response.json({ code: 'unavailable' }, { status: 503 }));
+  for (let tries = 0; tries < 25 && (await handler({ action: 'session' })).uploading; tries++) await delay(10);
+  const finished = await handler({ action: 'session' });
+  assert.equal(finished.uploadingKind, null);
+  assert.equal(finished.lastUpload, null);
+  assert.equal(finished.nextAutomaticAt, null);
+  time += 60_000;
+  t.mock.timers.tick(1000);
+  await delay(10);
+  assert.equal(requests.length, 2);
 });
 
 test('the plugin shows the ranking while local usage is still loading', { timeout: 3000 }, async t => {
@@ -673,6 +729,7 @@ test('an offline logout survives a restart and revokes only the old session', { 
 });
 
 test('login returns before initialization and the same session resumes it after a plugin restart', { timeout: 7000 }, async t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
   const api = await fixture(t);
   const storage = new Map(), secrets = new Map();
   let handle, historyReady = false;
@@ -704,6 +761,12 @@ test('login returns before initialization and the same session resumes it after 
   stop();
   historyReady = true;
   stop = launch();
+  assert.equal((await handle({ action: 'session' })).nextAutomaticAt, api.clock() + 10_000);
+  api.advance(9999);
+  t.mock.timers.tick(1000);
+  assert.deepEqual((await handle({ action: 'state' })).board.rows, []);
+  api.advance(1);
+  t.mock.timers.tick(1000);
   for (let attempt = 0; attempt < 30 && (await handle({ action: 'state' })).initializing; attempt++) await delay(35);
   const board = await handle({ action: 'state', days: 7 });
   assert.equal(board.initializing, false);

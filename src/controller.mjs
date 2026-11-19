@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { formatHitRatePercent, formatSpeedDisplay } from './parsers.mjs';
 
@@ -6,24 +7,24 @@ const STORE_KEY = 'preferences-v1';
 const EMPTY_ROOTS = () => Object.fromEntries(PROVIDERS.map(key => [key, []]));
 const cleanText = (value, limit = 160) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, limit);
 const HIDDEN_ROUTINE_WARNINGS = new Set([
-  '仅读取最近 100 个文件会话及最多 10 个数据库。',
-  'codex：较大会话只读取末尾 16 MiB，缺少开头的轮次不计入。'
+  sourceMessage('notice.recent-files-limit'),
+  sourceMessage('notice.codex-large-session')
 ]);
 
 export function validateRoots(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('记录路径设置无效');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(sourceMessage('notice.invalid-roots'));
   const roots = EMPTY_ROOTS();
   for (const key of Object.keys(value)) {
-    if (!PROVIDERS.includes(key)) throw new Error('未知的记录类型');
-    if (!Array.isArray(value[key]) || value[key].length > 16) throw new Error('每种记录最多填写 16 个路径');
+    if (!PROVIDERS.includes(key)) throw new Error(sourceMessage('notice.unknown-root-type'));
+    if (!Array.isArray(value[key]) || value[key].length > 16) throw new Error(sourceMessage('notice.root-limit'));
     roots[key] = [...new Set(value[key].map(path => {
-      if (typeof path !== 'string' || path.length > 4096 || /[\u0000\r\n]/.test(path)) throw new Error('记录路径无效');
+      if (typeof path !== 'string' || path.length > 4096 || /[\u0000\r\n]/.test(path)) throw new Error(sourceMessage('notice.invalid-path'));
       const trimmed = path.trim();
-      if (/^[a-z]+:\/\//i.test(trimmed)) throw new Error('请填写本机文件路径，不支持网址');
+      if (/^[a-z]+:\/\//i.test(trimmed)) throw new Error(sourceMessage('notice.local-path-required'));
       return trimmed;
     }).filter(Boolean))];
   }
-  if (Buffer.byteLength(JSON.stringify(roots), 'utf8') > 16 * 1024) throw new Error('路径设置过长，请减少额外路径');
+  if (Buffer.byteLength(JSON.stringify(roots), 'utf8') > 16 * 1024) throw new Error(sourceMessage('notice.root-size-limit'));
   return roots;
 }
 
@@ -47,19 +48,20 @@ const matchesTarget = (session, target) => {
 };
 // Transient unidentified-page reports while an agent runs (tab busy-state, capture lag).
 const TRANSIENT_PAGE_PATTERNS = [
-  '不是可统计的终端对话', '页签尚未识别', '状态尚未同步', '尚未识别',
-  '等待 Orca 记录', '正在更新', '稍后', '等待'
+  sourceMessage('selector.not-terminal'), sourceMessage('selector.tab-unidentified'), sourceMessage('selector.sync-pending'), sourceMessage('selector.unidentified'),
+  sourceMessage('selector.waiting-for-orca'), sourceMessage('selector.updating'), sourceMessage('selector.later'), sourceMessage('selector.waiting')
 ];
 
 export function createTpsController(orca, {
   readActive, readSession, now = Date.now, pollMs = 5000, focusPollMs = 250,
-  holdActivityMs = 120_000, onTargetChange = () => {}, onOpenTargets = () => {}, cache
+  holdActivityMs = 120_000, onTargetChange = () => {}, onOpenTargets = () => {}, cache, locales
 } = {}) {
+  const t = locales?.t ?? sourceMessage;
   const instanceId = randomUUID();
   let target = null, key = null, sessionsSig = '', session = null;
   let roots = EMPTY_ROOTS(), warnings = [];
   let updatedAt = null, loading = true, generation = 0;
-  let emptyMessage = '正在识别当前频道…';
+  let emptyMessage = sourceMessage('notice.detecting-channel');
   let stopped = false, started = false;
   let contextPending = null, loadTask = null, timer = null;
   let lastReadAt = -Infinity, lastStatus = '', lastSnapshot = '', publishSequence = 0;
@@ -73,15 +75,26 @@ export function createTpsController(orca, {
       instanceId, generation,
       activeSession: target ? (isChannelTarget(target) ? {
         id: publicChannelId(target),
-        title: cleanText(target.title || session?.title || '当前频道'),
+        title: cleanText(target.title || session?.title || sourceMessage('current-channel')),
         provider: 'channel'
       } : {
         id: `${target.provider}:${target.sessionId}`,
-        title: cleanText(target.title || session?.title || '当前对话'),
+        title: cleanText(target.title || session?.title || sourceMessage('current-conversation')),
         provider: target.provider
       }) : null,
       records: session?.records?.slice(0, 100) ?? [],
       loading, updatedAt, warnings: [...warnings], emptyMessage
+    };
+  }
+
+  function panelState(snapshot = state()) {
+    if (!locales) return snapshot;
+    const activeSession = snapshot.activeSession;
+    return {
+      ...snapshot,
+      activeSession: activeSession && { ...activeSession, title: locales.notice(activeSession.title) },
+      warnings: snapshot.warnings.map(text => locales.notice(text)),
+      emptyMessage: locales.notice(snapshot.emptyMessage)
     };
   }
 
@@ -95,14 +108,14 @@ export function createTpsController(orca, {
     ]);
   }
 
-  function publish() {
+  function publish(force = false) {
     if (stopped) return Promise.resolve();
-    const snapshot = state(), signature = JSON.stringify(snapshot);
-    if (signature === lastSnapshot) return statusQueue;
+    const snapshot = panelState(), signature = JSON.stringify(snapshot);
+    if (!force && signature === lastSnapshot) return statusQueue;
     lastSnapshot = signature;
     const sequence = ++publishSequence;
     try { orca.panels.post('tps.changed', snapshot); }
-    catch { orca.log('面板推送暂未送达，打开右侧对话 TPS 可重新读取。'); }
+    catch { orca.log(t('notice.panel-push-failed')); }
     // Fresh data extends the retention window; stale-only snapshots do not.
     const stamp = recordsStamp(snapshot.records);
     if (snapshot.records.length && stamp !== dataStamp) {
@@ -110,15 +123,15 @@ export function createTpsController(orca, {
       holdUntil = now() + holdActivityMs;
     }
     const latest = snapshot.records[0];
-    const speedText = formatSpeedDisplay(latest);
-    const cacheText = formatHitRatePercent(latest?.cacheHitRate);
-    const text = `🚀 ${speedText} tokens/s · 🍪 命中 ${cacheText}`;
+    const speedText = formatSpeedDisplay(latest, locales?.code);
+    const cacheText = formatHitRatePercent(latest?.cacheHitRate, locales?.code);
+    const text = t('status.speed-and-cache', speedText, cacheText);
     const tooltip = cleanText([
       snapshot.activeSession
-        ? `${snapshot.activeSession.provider === 'channel' ? '当前频道' : '当前对话'}：${snapshot.activeSession.title}`
+        ? t('status.session-title', t(snapshot.activeSession.provider === 'channel' ? 'current-channel' : 'current-conversation'), snapshot.activeSession.title)
         : snapshot.emptyMessage,
-      '最新请求速度（剔除工具耗时；代理扣首字 ≥100 tok，日志估算 ≥200 tok 且 ≥1s）。',
-      snapshot.loading ? '正在刷新' : snapshot.warnings.length ? '部分数据不可用，详见面板' : '点击刷新'
+      t('status.latest-speed-note'),
+      t(snapshot.loading ? 'status.refreshing' : snapshot.warnings.length ? 'status.partial-data' : 'status.click-refresh')
     ].join('\n'), 256);
     const status = JSON.stringify({ text, tooltip });
     // Serialize host writes so an older asynchronous update cannot win after a switch.
@@ -127,7 +140,7 @@ export function createTpsController(orca, {
       try {
         await orca.host.call('statusBar.update', { id: 'speed', text, tooltip, tone: 'success', visible: true });
         lastStatus = status;
-      } catch { orca.log('状态栏暂不可用，请使用 Orca 1.4.251 或更新版本。'); }
+      } catch { orca.log(t('notice.status-unavailable')); }
     });
     return statusQueue;
   }
@@ -147,19 +160,19 @@ export function createTpsController(orca, {
     const task = (async () => {
       let context;
       try { context = await readActive(); }
-      catch { context = { target: null, message: '暂时无法读取当前对话，请稍后刷新。' }; }
+      catch { context = { target: null, message: sourceMessage('notice.read-current-failed') }; }
       if (stopped) return;
       const next = context?.target ?? null, nextKey = targetKey(next), nextSessionsSig = sessionsSignature(next);
       const rawMessage = context?.message || (next
-        ? (isChannelTarget(next) ? '当前频道还没有可统计的请求记录。' : '当前对话还没有可统计的请求记录。')
-        : '当前页面暂无可统计的对话。');
+        ? (isChannelTarget(next) ? sourceMessage('notice.empty-channel-requests') : sourceMessage('notice.empty-conversation-requests'))
+        : sourceMessage('notice.empty-page-conversation'));
       const withinHold = Boolean(session?.records?.length) && now() < holdUntil;
       // While retention holds, an unidentified-page report during an agent run is
       // transient: change nothing (target/key/session stay on the last conversation,
       // which keeps refreshing); only soften the status message.
       if (!next && withinHold && TRANSIENT_PAGE_PATTERNS.some(pattern => rawMessage.includes(pattern))) {
         rememberOpenTargets(context, target);
-        const message = cleanText(`${rawMessage} · 保留最近统计，将在对话恢复后自动刷新。`, 300);
+        const message = cleanText(sourceMessage('notice.keep-recent-stats', rawMessage), 300);
         if (message !== emptyMessage) {
           emptyMessage = message;
           void publish();
@@ -272,7 +285,7 @@ export function createTpsController(orca, {
         if (stopped || requestedGeneration !== generation) return state();
         // Read failure: retain the last good records so a transient I/O error
         // does not blank the panel; only the warning changes.
-        warnings = ['当前对话的记录读取失败，保留上次统计，请稍后刷新。'];
+        warnings = [sourceMessage('notice.keep-last-request-data')];
         if (!cache && !requestedTarget.executionHostId) updatedAt = now();
       }
       loading = false;
@@ -298,20 +311,20 @@ export function createTpsController(orca, {
     try {
       const saved = await orca.storage.get(STORE_KEY);
       if (saved?.roots) roots = validateRoots(saved.roots);
-    } catch { orca.log('旧路径设置无法读取，使用默认位置。'); }
+    } catch { orca.log(t('notice.path-settings-unavailable')); }
     if (stopped) return;
     registrations.push(
-      orca.panels.handle('tps.state', () => state()),
-      orca.panels.handle('tps.refresh', refresh),
+      orca.panels.handle('tps.state', () => panelState()),
+      orca.panels.handle('tps.refresh', async () => panelState(await refresh())),
       orca.commands.register('tps.refresh', refresh)
     );
     const firstRefresh = refresh();
     if (focusPollMs > 0) {
-      timer = setInterval(() => { void checkActive().catch(() => orca.log('后台刷新失败，将在下次重试。')); }, focusPollMs);
+      timer = setInterval(() => { void checkActive().catch(() => orca.log(t('notice.background-refresh-failed'))); }, focusPollMs);
       timer.unref?.();
     }
     if (!background) await firstRefresh;
-    else void firstRefresh.catch(() => orca.log('当前对话读取失败，请稍后刷新。'));
+    else void firstRefresh.catch(() => orca.log(t('notice.first-refresh-failed')));
   }
 
   function stop() {
@@ -319,5 +332,5 @@ export function createTpsController(orca, {
     clearInterval(timer);
     for (const entry of registrations) entry.dispose();
   }
-  return { start, stop, refresh, checkActive, state };
+  return { start, stop, refresh, checkActive, state, refreshLocale: () => publish(true) };
 }

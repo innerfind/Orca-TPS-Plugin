@@ -1,3 +1,4 @@
+import { sourceMessage } from './locales.mjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { execFile, spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -12,13 +13,13 @@ import { COLLECTOR_FILES, MAX_RESPONSE_BASE64, USAGE_PAGE_SIZE, collectorCommand
 import { REMOTE_USAGE_PREFIX } from './usage-summary.mjs';
 
 const warnings = {
-  api: '当前 Orca 版本缺少远程项目接口，请更新 Orca。',
-  permission: '请在 Orca 的插件设置中授权读取工作区。',
-  workspace: '暂时无法确认远程项目频道，等待 Orca 工作区同步。',
-  ssh: '该远程项目没有可用的 SSH 连接。保留该频道上次的结果。',
-  node: '远程机器需要可用的 Node.js 22.13 或更新版本，并支持 SQLite。',
-  connection: '暂时无法连接远程统计，保留该频道上次的结果。',
-  read: '远程会话日志暂时无法读取，保留该频道上次的结果。'
+  api: sourceMessage('notice.remote-api-missing'),
+  permission: sourceMessage('notice.remote-permission'),
+  workspace: sourceMessage('notice.remote-workspace-unavailable'),
+  ssh: sourceMessage('notice.remote-ssh-unavailable'),
+  node: sourceMessage('notice.remote-node-unavailable'),
+  connection: sourceMessage('notice.remote-connection-failed'),
+  read: sourceMessage('notice.remote-log-unavailable')
 };
 
 class RemoteReadError extends Error {
@@ -299,7 +300,7 @@ function connectCollector(child, token, watchId) {
 
 export function createRemoteChannelReader(orca, {
   timeoutMs = 20_000, startupTimeoutMs = 30_000, now = Date.now,
-  resolveRuntime = createRuntimeLookup(orca), launch = launchSsh
+  resolveRuntime = createRuntimeLookup(orca), launch = launchSsh, t = sourceMessage
 } = {}) {
   let wanted = new Set();
   const collectors = new Map(), retries = new Map();
@@ -379,7 +380,7 @@ export function createRemoteChannelReader(orca, {
           provider: 'channel',
           records: answer.records.slice(0, 100).map(remoteRecord).filter(Boolean).sort((a, b) => b.completedAt - a.completedAt)
         },
-        warnings: answer.incomplete ? ['远程项目的部分会话日志暂时无法读取。'] : []
+        warnings: answer.incomplete ? [sourceMessage('notice.remote-logs-incomplete')] : []
       };
     } catch (error) {
       if (collectors.get(target.key) === entry) {
@@ -387,7 +388,7 @@ export function createRemoteChannelReader(orca, {
         const lastFailure = denied ? 'permission' : Object.hasOwn(warnings, error.reason) ? error.reason : 'connection';
         const code = typeof error.code === 'string' && /^[a-z0-9_]+$/i.test(error.code) ? error.code : lastFailure;
         const action = error.operation ? entry.stage + '/' + error.operation : entry.stage;
-        orca.log?.('远程统计读取失败（' + action + ': ' + code + '）。');
+        orca.log?.(t('notice.remote-read-failed', action, code));
         retries.set(target.key, { at: now() + 10_000, reason: lastFailure });
         retire(entry);
         return resultError(lastFailure);
@@ -422,7 +423,7 @@ function validUsageDays(days) {
         counters.every(value => Number.isFinite(value) && value >= 0))));
 }
 
-export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts(), launch = launchSsh } = {}) {
+export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts(), launch = launchSsh, t = sourceMessage } = {}) {
   const lifetime = new AbortController();
   const connections = new Set();
   const signal = timeout => AbortSignal.any([lifetime.signal, AbortSignal.timeout(timeout)]);
@@ -489,7 +490,7 @@ export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts
     let routes;
     try { routes = await resolveHosts(signal(15_000)); }
     catch {
-      if (!lifetime.signal.aborted) orca.log?.('暂时无法枚举远端用量来源，保留上次统计。');
+      if (!lifetime.signal.aborted) orca.log?.(t('notice.remote-usage-list-failed'));
       return discovery;
     }
     const scopes = new Map();
@@ -505,7 +506,7 @@ export function createRemoteUsageReader(orca, { resolveHosts = resolveUsageHosts
       const scanned = await Promise.allSettled(group.map(([scope, route]) => scanHost(route, scope, cutoffMs, timeZone, rankDay, rankFrom)));
       for (const [index, result] of scanned.entries()) {
         if (result.status !== 'fulfilled') {
-          if (!lifetime.signal.aborted) orca.log?.('部分远端用量暂不可读，保留上次统计。');
+          if (!lifetime.signal.aborted) orca.log?.(t('notice.remote-usage-partial'));
           continue;
         }
         discovery.coveredRemoteScopes.add(group[index][0]);
