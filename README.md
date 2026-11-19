@@ -77,35 +77,17 @@ Use **Orca 1.4.251 or later** on Windows or Linux. To collect usage from an SSH 
 
 ### Orca plugin directory
 
-Find **TPS Plugion** in Orca’s plugin directory, review its permissions, and install it. [View the plugin listing](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)
-
-### Git repository
-
-To install from the main branch, run the following command and follow the approval prompt.
-
-```sh
-orca plugin install https://github.com/jecyxyf/Orca-TPS-Plugin.git --ref main
-```
+Open **Settings → Plugins**, search for **TPS**, and select the entry by **jecyxyf**. Click **Install** and review the requested permissions. Orca downloads the plugin for you. [View the plugin listing](https://api.onorca.dev/plugins/jecyxyf/orca-tps-plugin)
 
 ### Local installation
 
-**Windows (PowerShell)**
-
-```powershell
-git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git "$env:USERPROFILE\Applications\orca-tps-plugin"
-Set-Location "$env:USERPROFILE\Applications\orca-tps-plugin"
-./install-windows.ps1
-```
-
-**Linux**
+Clone this repository.
 
 ```sh
-git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git ~/Applications/orca-tps-plugin
-cd ~/Applications/orca-tps-plugin
-sh install-linux.sh
+git clone https://github.com/jecyxyf/Orca-TPS-Plugin.git
 ```
 
-If the Orca CLI is outside your PATH, set ORCA_CLI to its full path when running the Linux installer. Keep the clone in place while the plugin is loaded from it.
+In Orca, open **Settings → Plugins → Development folders…** and add the cloned folder containing `orca-plugin.json`. Review the permissions and enable the plugin. Keep the cloned folder in place while using it.
 
 After installation, open **TPS Plugin** in Orca’s right sidebar.
 
