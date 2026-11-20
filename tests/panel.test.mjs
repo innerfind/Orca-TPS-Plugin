@@ -102,3 +102,135 @@ test('panel resolves per-record agent label from record.provider and shows chann
   assert.match(html, /function\s+agentLabel\(\s*provider\s*\)/, 'agentLabel must accept per-record provider override');
   assert.match(html, /activeSession\?\.provider\s*===\s*['"]channel['"]/, 'summary must display channel title when in channel mode');
 });
+
+async function loadAvatarView() {
+  const html = await readFile(panelPath, 'utf8');
+  const source = /\/\/ avatar-view:start([\s\S]*?)\/\/ avatar-view:end/.exec(html)?.[1];
+  assert.ok(source, 'panel must keep the avatar view between avatar-view markers');
+  return new Function(source + '\nreturn createAvatarView;')();
+}
+
+function fakeAvatar() {
+  return {
+    dataset: {}, isConnected: true, children: [],
+    replaceChildren(...nodes) { this.children = nodes; },
+    get shown() { return this.children[0]?.kind === 'img' ? this.children[0].src : 'red-hat'; }
+  };
+}
+
+function fakeImage() {
+  const listeners = {};
+  return {
+    kind: 'img', alt: undefined, decoding: undefined, _src: '',
+    addEventListener(type, listener) { listeners[type] = listener; },
+    set src(value) { this._src = value; queueMicrotask(() => listeners[value.startsWith('data:image/') ? 'load' : 'error']?.()); },
+    get src() { return this._src; }
+  };
+}
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test('panel avatar view retries default avatars on new rows and reuses loaded avatars everywhere', async () => {
+  const createAvatarView = await loadAvatarView();
+  const image = 'data:image/png;base64,YXZhdGFy';
+  const loads = [];
+  let reply = null;
+  const view = createAvatarView({
+    fallback: () => ({ kind: 'red-hat' }),
+    createImage: fakeImage,
+    load: async username => { loads.push(username); return reply; },
+    visible: () => true,
+    Observer: null
+  });
+
+  const account = fakeAvatar(), firstRow = fakeAvatar();
+  view.set(account, 'jecyxyf');
+  view.set(firstRow, 'jecyxyf');
+  await settle();
+  assert.deepEqual(loads, ['jecyxyf'], 'one request covers every avatar of the same user');
+  assert.equal(account.shown, 'red-hat');
+  assert.equal(firstRow.shown, 'red-hat');
+
+  view.set(account, 'jecyxyf');
+  await settle();
+  assert.deepEqual(loads, ['jecyxyf'], 'an unchanged account does not request again on its own');
+
+  reply = image;
+  firstRow.isConnected = false;
+  const secondRow = fakeAvatar();
+  view.set(secondRow, 'jecyxyf');
+  view.set(account, 'jecyxyf', { retry: true });
+  await settle();
+  assert.deepEqual(loads, ['jecyxyf', 'jecyxyf'], 'a regenerated row with a default avatar requests once more');
+  assert.equal(secondRow.shown, image);
+  assert.equal(account.shown, image, 'a successful avatar also updates the account avatar');
+
+  const thirdRow = fakeAvatar();
+  view.set(thirdRow, 'JECYXYF');
+  view.set(account, 'jecyxyf', { retry: true });
+  await settle();
+  assert.equal(thirdRow.shown, image, 'a loaded avatar is shown at once');
+  assert.deepEqual(loads, ['jecyxyf', 'jecyxyf'], 'a loaded avatar is never requested again');
+
+  view.set(account, '');
+  assert.equal(account.shown, 'red-hat', 'signing out shows the default avatar');
+});
+
+test('panel avatar view ignores invalid images and keeps the default red hat icon', async () => {
+  const createAvatarView = await loadAvatarView();
+  const view = createAvatarView({
+    fallback: () => ({ kind: 'red-hat' }),
+    createImage: fakeImage,
+    load: async () => 'https://example.test/a.png',
+    visible: () => true,
+    Observer: null
+  });
+  const avatar = fakeAvatar();
+  view.set(avatar, 'alice');
+  await settle();
+  assert.equal(avatar.shown, 'red-hat');
+
+  const html = await readFile(panelPath, 'utf8');
+  const fallback = /<template id="ladder-avatar-fallback">([\s\S]*?)<\/template>/.exec(html)?.[1] ?? '';
+  assert.match(fallback, /data-icon="red-hat"/, 'the default avatar is the red hat icon');
+  assert.match(fallback, /#d62828|#c1121f|#e63946/i, 'the red hat icon is red');
+});
+
+test('panel avatar view loads visible avatars through the observer and retries a still-default slot', async () => {
+  const createAvatarView = await loadAvatarView();
+  const image = 'data:image/png;base64,YXZhdGFy';
+  const loads = [], observed = [];
+  let reply = null, shown = true;
+  class FakeObserver {
+    constructor(callback) { this.callback = callback; }
+    observe(target) { observed.push(target); queueMicrotask(() => this.callback([{ target, isIntersecting: true }])); }
+    unobserve() {}
+    disconnect() {}
+  }
+  const view = createAvatarView({
+    fallback: () => ({ kind: 'red-hat' }),
+    createImage: fakeImage,
+    load: async username => { loads.push(username); return reply; },
+    visible: () => shown,
+    Observer: FakeObserver
+  });
+  const account = fakeAvatar();
+  shown = false;
+  view.set(account, 'alice');
+  await settle();
+  assert.deepEqual(loads, [], 'hidden leaderboards do not load avatars');
+  shown = true;
+  view.set(account, 'alice', { retry: true });
+  await settle();
+  assert.deepEqual(loads, ['alice']);
+  assert.equal(account.shown, 'red-hat');
+  reply = image;
+  view.set(account, 'alice', { retry: true });
+  await settle();
+  assert.deepEqual(loads, ['alice', 'alice']);
+  assert.equal(account.shown, image);
+  view.set(account, 'alice', { retry: true });
+  await settle();
+  assert.deepEqual(loads, ['alice', 'alice'], 'a loaded avatar is not observed or requested again');
+  assert.equal(observed.length, 3);
+});

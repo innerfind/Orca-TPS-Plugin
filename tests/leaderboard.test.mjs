@@ -573,10 +573,13 @@ test('avatar downloads are bounded and reject non-image or oversized replies', a
   assert.deepEqual(calls, [1, 2, 3, 4, 5]);
   assert.equal(await cache.get('player4'), null);
   assert.deepEqual(calls, [1, 2, 3, 4, 5]);
-  now += 5 * 60_000;
+  now += 9_999;
+  assert.equal(await cache.get('player4'), null);
+  assert.deepEqual(calls, [1, 2, 3, 4, 5], 'a failed avatar waits one sync interval');
+  now += 1;
   assert.equal(await cache.get('player4'), null);
   assert.equal(await cache.get('player1'), image);
-  assert.deepEqual(calls, [1, 2, 3, 4, 5, 4]);
+  assert.deepEqual(calls, [1, 2, 3, 4, 5, 4], 'a failed avatar is retried after one sync interval');
 });
 
 test('avatar lookup by GitHub login accepts only the expected image redirect', async () => {
