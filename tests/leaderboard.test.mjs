@@ -1002,3 +1002,40 @@ test('usage discovery separates requests on either side of Beijing midnight from
   assert.equal(history.ready, true);
   assert.deepEqual(history.scores, [{ day: leaderboardDay(start - 1), tokens: 15 }, { day, tokens: 50 }]);
 });
+
+test("today's usage uploads whatever has been read so far, even before every file is up to date", async t => {
+  const api = await fixture(t);
+  const storage = new Map(), secrets = new Map(), handlers = new Map();
+  const orca = {
+    storage: { get: async key => storage.get(key), set: async (key, value) => storage.set(key, value) },
+    host: { has: () => true, call: async (method, { key, value }) => {
+      if (method === 'secrets.get') return { value: secrets.get(key) };
+      if (method === 'secrets.set') return secrets.set(key, value);
+      if (method === 'secrets.delete') return secrets.delete(key);
+    } },
+    grantedCapabilities: ['secrets:own'],
+    panels: { handle: (name, run) => { handlers.set(name, run); return { dispose: () => handlers.delete(name) }; } }
+  };
+  let tokens = 0;
+  const stop = startLeaderboard(orca, {
+    endpoint: api.endpoint, now: () => new Date(api.clock()),
+    readUsage: async () => ({ day: TODAY, tokens, ready: false })
+  });
+  t.after(() => stop());
+  const run = (action, fields = {}) => handlers.get('tps.leaderboard')({ action, ...fields });
+  await api.authorizePlugin((await run('login')).loginUrl, 'alice');
+  assert.equal((await run('poll')).code, 'signed_in');
+
+  assert.equal((await run('submit')).code, 'usage_unready', 'nothing is uploaded while no usage has been read today');
+  tokens = 300;
+  const manual = await run('submit');
+  assert.equal(manual.code, 'accepted', 'a partial total is uploaded by a manual sync');
+  assert.equal(manual.board.tokens, 300);
+
+  tokens = 450;
+  api.advance(10_000);
+  for (let tries = 0; tries < 40 && (await run('session')).lastUpload?.kind !== 'automatic'; tries++) await delay(50);
+  const automatic = await run('session');
+  assert.deepEqual(automatic.lastUpload, { kind: 'automatic', code: 'accepted', at: api.clock() }, 'automatic sync uploads the partial total too');
+  assert.equal(automatic.board.tokens, 450, 'a later sync replaces the earlier partial total');
+});

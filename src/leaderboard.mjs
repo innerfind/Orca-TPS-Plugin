@@ -380,7 +380,8 @@ export function startLeaderboard(orca, {
   async function performSubmission(preview, kind, stillEnabled) {
     if (!token) return { code: 'login_required' };
     const credential = token;
-    if (!preview?.ready || !Number.isSafeInteger(preview.tokens) || preview.tokens < 1) return { code: 'usage_unready' };
+    // Upload whatever today's total has been read so far; later syncs replace it as more files are read.
+    if (!Number.isSafeInteger(preview?.tokens) || preview.tokens < 1) return { code: 'usage_unready' };
     const id = await installationId();
     if (!id) return { code: 'installation_unavailable' };
     if (!stillEnabled() || token !== credential || lifetime.signal.aborted) return { code: 'upload_disabled' };
@@ -432,7 +433,7 @@ export function startLeaderboard(orca, {
     scheduling = true;
     try {
       const preview = await readUsage();
-      if (!stillSignedIn() || !preview.ready || preview.tokens < 1) return;
+      if (!stillSignedIn() || !(preview?.tokens >= 1)) return;
       const kind = manualQueued ? 'manual' : 'automatic';
       manualQueued = false;
       const result = await submit(preview, kind, stillSignedIn);
