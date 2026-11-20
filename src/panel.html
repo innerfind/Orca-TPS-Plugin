@@ -816,10 +816,10 @@
   </main>
 
   <template id="ladder-avatar-fallback">
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path fill="currentColor" d="M12 2c-3.6 0-6.5 3.6-7.5 8.2L3 18.4 6.1 21h11.8l3.1-2.6-1.5-8.2C18.5 5.6 15.6 2 12 2Z"/>
-      <path fill="var(--button-bg)" d="m12 6-4.1 3.2L7 14.4l2.3 3.3h5.4l2.3-3.3-.9-5.2Z"/>
-      <path fill="currentColor" d="M8.9 11.8h2v1.7h-2zm4.2 0h2v1.7h-2z"/>
+    <svg viewBox="0 0 24 24" data-icon="red-hat" aria-hidden="true" focusable="false">
+      <ellipse cx="12" cy="16.6" rx="10" ry="3.1" fill="#c1121f"/>
+      <path fill="#e63946" d="M6.6 15.8C6.3 11.2 7 6.9 9 5.7c1.2-.7 2 .2 3 .2s1.8-.9 3-.2c2 1.2 2.7 5.5 2.4 10.1Z"/>
+      <path fill="#f1faee" d="M6.7 13.3h10.6l-.1 2.1c-3.5 1-7 1-10.4 0Z"/>
     </svg>
   </template>
   <template id="record-template">
@@ -1629,38 +1629,112 @@
         return { code: 'unavailable' };
       }
 
-      const observedAvatars = new Set();
-      const avatarObserver = typeof IntersectionObserver === 'function' ? new IntersectionObserver(entries => {
-        for (const { target, isIntersecting } of entries) {
-          if (!isIntersecting || group.hidden || !observedAvatars.delete(target)) continue;
-          avatarObserver.unobserve(target);
-          void loadAvatar(target);
-        }
-      }, { rootMargin: '48px 0px' }) : null;
+      // avatar-view:start
+      // Shows the red hat icon until a GitHub avatar loads. A loaded avatar is reused for every
+      // slot of that user and never requested again; a default avatar is requested once per new
+      // slot, or again when the caller asks for a retry after a sync.
+      function createAvatarView({ fallback, createImage, load, visible, Observer }) {
+        const IMAGE_PATTERN = /^data:image\/(?:png|jpeg|webp|gif);base64,/;
+        const images = new Map(), loading = new Map(), slots = new Set(), waiting = new Set();
+        const keyOf = username => typeof username === 'string' ? username.toLowerCase() : '';
+        const observer = Observer ? new Observer(entries => {
+          for (const { target, isIntersecting } of entries) {
+            if (!isIntersecting || !visible() || !waiting.delete(target)) continue;
+            observer.unobserve(target);
+            void fetchAvatar(target.dataset.username);
+          }
+        }, { rootMargin: '48px 0px' }) : null;
 
-      async function loadAvatar(avatar) {
-        const username = avatar.dataset.username;
-        const { image } = await request('avatar', { username });
-        if (typeof image !== 'string' || !/^data:image\/(?:png|jpeg|webp|gif);base64,/.test(image)) return;
-        const stillCurrent = () => !lifetime.signal.aborted && avatar.isConnected && avatar.dataset.username === username;
-        if (!stillCurrent()) return;
-        const img = document.createElement('img');
-        img.alt = '';
-        img.decoding = 'async';
-        img.addEventListener('load', () => { if (stillCurrent()) avatar.replaceChildren(img); }, { once: true });
-        img.src = image;
-      }
-
-      function setAvatar(avatar, username = '') {
-        if (username === avatar.dataset.username) return;
-        avatar.dataset.username = username;
-        avatar.replaceChildren(element('avatar-fallback').content.cloneNode(true));
-        if (observedAvatars.delete(avatar)) avatarObserver.unobserve(avatar);
-        if (username && avatarObserver) {
-          observedAvatars.add(avatar);
-          avatarObserver.observe(avatar);
+        function showImage(avatar, image) {
+          const img = createImage();
+          img.alt = '';
+          img.decoding = 'async';
+          img.src = image;
+          avatar.replaceChildren(img);
+          avatar.dataset.avatar = 'image';
         }
+
+        function showFallback(avatar) {
+          if (avatar.dataset.avatar === 'fallback') return;
+          avatar.replaceChildren(fallback());
+          avatar.dataset.avatar = 'fallback';
+        }
+
+        function decodes(image) {
+          return new Promise(resolve => {
+            const img = createImage();
+            img.addEventListener('load', () => resolve(true), { once: true });
+            img.addEventListener('error', () => resolve(false), { once: true });
+            img.src = image;
+          });
+        }
+
+        function paint(key) {
+          const image = images.get(key);
+          for (const avatar of slots) {
+            if (!avatar.isConnected) slots.delete(avatar);
+            else if (keyOf(avatar.dataset.username) === key && avatar.dataset.avatar !== 'image') showImage(avatar, image);
+          }
+        }
+
+        function fetchAvatar(username) {
+          const key = keyOf(username);
+          if (!key || images.has(key) || loading.has(key)) return loading.get(key);
+          const job = Promise.resolve().then(() => load(username)).then(async image => {
+            if (typeof image !== 'string' || !IMAGE_PATTERN.test(image) || !await decodes(image)) return;
+            images.set(key, image);
+            paint(key);
+          }).catch(() => {}).finally(() => loading.delete(key));
+          loading.set(key, job);
+          return job;
+        }
+
+        function stopWaiting(avatar) {
+          if (waiting.delete(avatar)) observer.unobserve(avatar);
+        }
+
+        function set(avatar, username = '', { retry = false } = {}) {
+          const key = keyOf(username), changed = keyOf(avatar.dataset.username) !== key || !avatar.dataset.avatar;
+          avatar.dataset.username = username;
+          slots.add(avatar);
+          if (images.has(key)) {
+            stopWaiting(avatar);
+            if (avatar.dataset.avatar !== 'image' || changed) showImage(avatar, images.get(key));
+            return;
+          }
+          if (changed) {
+            stopWaiting(avatar);
+            avatar.dataset.avatar = '';
+            showFallback(avatar);
+          }
+          if (!key || !(changed || retry)) return;
+          if (!observer) {
+            void fetchAvatar(username);
+            return;
+          }
+          stopWaiting(avatar);
+          waiting.add(avatar);
+          observer.observe(avatar);
+        }
+
+        function dispose() {
+          observer?.disconnect();
+          waiting.clear();
+          slots.clear();
+        }
+
+        return { set, dispose };
       }
+      // avatar-view:end
+
+      const avatarView = createAvatarView({
+        fallback: () => element('avatar-fallback').content.cloneNode(true),
+        createImage: () => document.createElement('img'),
+        load: async username => (await request('avatar', { username }))?.image,
+        visible: () => !group.hidden && !lifetime.signal.aborted,
+        Observer: typeof IntersectionObserver === 'function' ? IntersectionObserver : null
+      });
+      const setAvatar = (avatar, username, options) => avatarView.set(avatar, username, options);
 
       function medal(rank, period) {
         const place = podium[rank - 1];
@@ -2121,11 +2195,8 @@
           item.append(rank, user, total, time, pulseRow);
           return item;
         });
-        for (const avatar of observedAvatars) {
-          if (avatar.isConnected) continue;
-          avatarObserver.unobserve(avatar);
-          observedAvatars.delete(avatar);
-        }
+        // Rows changed after a sync: give a still-default account avatar another chance too.
+        setAvatar(element('account-avatar'), username, { retry: true });
       }
 
       function renderAccount(username, account) {
@@ -2545,8 +2616,7 @@
         watchPulse(false);
         stopPulseLoop();
         lifetime.abort();
-        avatarObserver?.disconnect();
-        observedAvatars.clear();
+        avatarView.dispose();
         rankingSubscription?.dispose();
         pulseSubscription?.dispose();
         cancelAnimationFrame(leaderboardFrame);
